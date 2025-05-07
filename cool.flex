@@ -264,7 +264,7 @@ t{R}{U}{E}          {
   *  Whitespace
   */
 \n                  { curr_lineno++; }
-[ \n\f\r\t\v]+      ;
+[ \f\r\t\v]+        ;
 
 .                   {
                       cool_yylval.error_msg = strdup(yytext);
