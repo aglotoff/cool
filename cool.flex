@@ -42,7 +42,7 @@ extern YYSTYPE cool_yylval;
 /*
  *  Add Your own definitions here
  */
-int comment_nesting = 0;
+int comment_nesting;
 
 %}
 
@@ -67,66 +67,69 @@ U               (u|U)
 V               (v|V)
 W               (w|W)
 
-%x STRING COMMENT
+%x COMMENT STRING
 
 %%
 
  /*
-  *  Nested comments.
+  *  Nested comments
   */
 "(*"                {
                       BEGIN COMMENT;
                       comment_nesting++;
                     }
-<COMMENT>"(*"       { comment_nesting++; }
-<COMMENT>"*)"       { 
-                      if (--comment_nesting == 0)
-                        BEGIN 0;
-                    }
-<COMMENT>\n         { curr_lineno++; }
-<COMMENT>[^*()\n]+  |
-<COMMENT>[*()]      ;
-<COMMENT><<EOF>>    {
-                      cool_yylval.error_msg = "EOF in comment";
-                      BEGIN 0;
-                      return (ERROR);
-                    }
 "*)"                {
                       cool_yylval.error_msg = "Unmatched *)";
                       return (ERROR);
                     }
+<COMMENT>"(*"       {
+                      comment_nesting++;
+                    }
+<COMMENT>"*)"       {
+                      if (--comment_nesting == 0)
+                        BEGIN INITIAL;
+                    }
+<COMMENT>[^*()\n]+  |
+<COMMENT>[*()]      ;
+<COMMENT>\n         { curr_lineno++; }
+<COMMENT><<EOF>>    {
+                      BEGIN INITIAL;
+
+                      cool_yylval.error_msg = "EOF in comment";
+                      return (ERROR);
+                    }
 
  /*
-  *  Single-line comments.
+  *  Single-line comments
   */
 "--".*              ;
 
  /*
-  *  Single-character special symbols.
-  */
-"-"                 |
-"+"                 |
-"*"                 |
-"/"                 |
-"~"                 |
-"="                 |
-","                 |
-";"                 |
-":"                 |
-"("                 |
-")"                 |
-"{"                 |
-"}"                 |
-"@"                 |
-"."                 |
-"<"                 { return (*yytext); }
-
- /*
-  *  The multiple-character operators.
+  *  The multiple-character operators
   */
 "=>"                { return (DARROW); }
 "<-"                { return (ASSIGN); }
 "<="                { return (LE); }
+
+ /*
+  *  Single-character special symbols
+  */
+":"                 |
+";"                 |
+","                 |
+"{"                 |
+"}"                 |
+"("                 |
+")"                 |
+"@"                 |
+"."                 |
+"+"                 |
+"-"                 |
+"*"                 |
+"/"                 |
+"~"                 |
+"<"                 |
+"="                 { return (*yytext); }
 
  /*
   * Keywords are case-insensitive except for the values true and false,
@@ -159,85 +162,6 @@ t{R}{U}{E}          {
                     }
 
  /*
-  *  String constants (C syntax)
-  *  Escape sequence \c is accepted for all characters c. Except for 
-  *  \n \t \b \f, the result is c.
-  *
-  */
-\"                  {
-                        BEGIN STRING;
-                        string_buf_ptr = string_buf;
-                    }
-<STRING>\"          {
-                      if (string_buf_ptr == NULL) {
-                        BEGIN 0;
-                        return (ERROR);
-                      }
-
-                      *string_buf_ptr = '\0';
-                      cool_yylval.symbol = stringtable.add_string(string_buf);
-                      string_buf_ptr = NULL;
-                      BEGIN 0;
-                      return (STR_CONST);
-                    }
-<STRING>\n          {
-                      curr_lineno++;
-                      string_buf_ptr = NULL;
-                      BEGIN 0;
-                      cool_yylval.error_msg = "Unterminated string constant";
-                      return (ERROR);
-                    }
-<STRING>\0          {
-                      string_buf_ptr = NULL;
-                      cool_yylval.error_msg = "String contains null character";
-                    }
-<STRING>\\?[^\0]    {
-                      if (string_buf_ptr != NULL) {
-                        if (string_buf_ptr >= &string_buf[MAX_STR_CONST - 1]) {
-                          string_buf_ptr = NULL;
-                          cool_yylval.error_msg = "String constant too long";
-                        } else if (yytext[0] == '\\') {
-                          switch (yytext[1]) {
-                            case 'b':
-                              *string_buf_ptr++ = '\b';
-                              break;
-                            case 't':
-                              *string_buf_ptr++ = '\t';
-                              break;
-                            case '\n':
-                              curr_lineno++;
-                              /* fall through */
-                            case 'n':
-                              *string_buf_ptr++ = '\n';
-                              break;
-                            case 'f':
-                              *string_buf_ptr++ = '\f';
-                              break;
-                            default:
-                              *string_buf_ptr++ = yytext[1];
-                              break;
-                          }
-                        } else {
-                          *string_buf_ptr++ = yytext[0];
-                        }
-                      }
-                    }
-<STRING><<EOF>>     {
-                      string_buf_ptr = NULL;
-                      BEGIN 0;
-                      cool_yylval.error_msg = "EOF in string constant";
-                      return (ERROR);
-                    }
-
- /*
-  *  Integer constants.
-  */
-[0-9]+              {
-                      cool_yylval.symbol = inttable.add_string(yytext);
-                      return (INT_CONST);
-                    }
-
- /*
   *  Type identifiers begin with a capital letter, object identifiers begin
   *  with a lower case letter.
   */
@@ -248,17 +172,100 @@ t{R}{U}{E}          {
 [a-z][_a-zA-Z0-9]*  {
                       cool_yylval.symbol = idtable.add_string(yytext);
                       return (OBJECTID);
-                    }            
+                    }
 
  /*
-  *  Whitespace.
+  *  String constants (C syntax)
+  *  Escape sequence \c is accepted for all characters c. Except for 
+  *  \n \t \b \f, the result is c.
+  *
+  */
+\"                  {
+                      BEGIN STRING;
+                      string_buf_ptr = string_buf;
+                    }
+<STRING>\"          {
+                      BEGIN INITIAL;
+
+                      if (string_buf_ptr == NULL)
+                        return (ERROR);
+                      
+                      *string_buf_ptr = '\0';
+                      cool_yylval.symbol = stringtable.add_string(string_buf);
+                      return (STR_CONST);
+                    }
+<STRING>\\[^\0]     {
+                      if (string_buf_ptr != NULL) {
+                        if (string_buf_ptr >= &string_buf[MAX_STR_CONST-1]) {
+                          cool_yylval.error_msg = "String constant too long";
+                          string_buf_ptr = NULL;
+                        } else {
+                          switch (yytext[1]) {
+                          case 'b':
+                            *string_buf_ptr++ = '\b';
+                            break;
+                          case 't':
+                            *string_buf_ptr++ = '\t';
+                            break;
+                          case '\n':
+                            curr_lineno++;
+                            // fall through
+                          case 'n':
+                            *string_buf_ptr++ = '\n';
+                            break;
+                          case 'f':
+                            *string_buf_ptr++ = '\f';
+                            break;
+                          default:
+                            *string_buf_ptr++ = yytext[1];
+                            break;
+                          }
+                        }
+                      }
+                    }
+<STRING>\0          {
+                      cool_yylval.error_msg = "String contains null character";
+                      string_buf_ptr = NULL;
+                    }
+<STRING>\n          {
+                      BEGIN INITIAL;
+
+                      curr_lineno++;
+
+                      cool_yylval.error_msg = "Unterminated string constant";
+                      return (ERROR);
+                    }
+<STRING>.           {
+                      if (string_buf_ptr != NULL) {
+                        if (string_buf_ptr >= &string_buf[MAX_STR_CONST-1]) {
+                          cool_yylval.error_msg = "String constant too long";
+                          string_buf_ptr = NULL;
+                        } else {
+                          *string_buf_ptr++ = *yytext;
+                        }
+                      }
+                    }
+<STRING><<EOF>>     {
+                      BEGIN INITIAL;
+
+                      cool_yylval.error_msg = "EOF in string constant";
+                      return (ERROR);
+                    }
+
+ /*
+  *  Integer constants
+  */
+[0-9]+              {
+                      cool_yylval.symbol = inttable.add_string(yytext);
+                      return (INT_CONST);
+                    }
+
+ /*
+  *  Whitespace
   */
 \n                  { curr_lineno++; }
-[ \f\r\t\v]+        ;
+[ \n\f\r\t\v]+      ;
 
- /*
-  *  Invalid character.
-  */
 .                   {
                       cool_yylval.error_msg = strdup(yytext);
                       return (ERROR);
