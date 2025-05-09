@@ -71,12 +71,12 @@
   }
   
   */
-    
-    
-    
+  
+  
+  
   void yyerror(char *s);        /*  defined below; called for each parse error */
   extern int yylex();           /*  the entry point to the lexer  */
-    
+  
   /************************************************************************/
   /*                DONT CHANGE ANYTHING IN THIS SECTION                  */
   
@@ -84,7 +84,7 @@
   Classes parse_results;        /* for use in semantic analysis */
   int omerrs = 0;               /* number of errors in lexing and parsing */
 %}
-  
+
 /* A union of all the types that can be the result of parsing actions. */
 %union {
   Boolean boolean;
@@ -102,7 +102,7 @@
   Expressions expressions;
   char *error_msg;
 }
-    
+  
 /* 
 Declare the terminals; a few have types for associated lexemes.
 The token ERROR is never used in the parser; thus, it is a parse
@@ -121,14 +121,14 @@ problems (bison 1.25 and earlier start at 258, later versions -- at
 %token <boolean> BOOL_CONST 277
 %token <symbol>  TYPEID 278 OBJECTID 279 
 %token ASSIGN 280 NOT 281 LE 282 ERROR 283
-    
+
 /*  DON'T CHANGE ANYTHING ABOVE THIS LINE, OR YOUR PARSER WONT WORK       */
 /**************************************************************************/
-
+  
 /* Complete the nonterminal list below, giving a type for the semantic
 value of each non terminal. (See section 3.6 in the bison 
 documentation for details). */
-    
+
 /* Declare types for the grammar's non-terminals. */
 %type <program> program
 %type <classes> class_list
@@ -138,236 +138,242 @@ documentation for details). */
 %type <formals> formal_list
 %type <formal> formal
 %type <expressions> expression_list
+%type <expressions> dispatch_arguments
+%type <expressions> actual_list
 %type <expression> expression
+%type <expression> let_binding
 %type <cases> case_list
 %type <case_> case
-%type <expressions> argument_list
-%type <expressions> dispatch_arguments
-%type <expression> let_binding
 
 /* Precedence declarations go here. */
-%nonassoc LET
-%right ASSIGN
-%left NOT
+%nonassoc LET_STMT
+%right    ASSIGN
+%nonassoc NOT
 %nonassoc LE '<' '='
-%left '+' '-'
-%left '*' '/'
-%left ISVOID
-%left '~'
-%left '@'
-%left '.'
-
+%left     '+' '-'
+%left     '*' '/'
+%nonassoc ISVOID
+%nonassoc '~'
+%nonassoc '@'
+%nonassoc '.'
+  
 %%
 /* Save the root of the abstract syntax tree in a global variable. */
-program:
-  class_list	{ @$ = @1; ast_root = program($1); }
+program: class_list
+    { @$ = @1; ast_root = program($1); }
 ;
 
 class_list:
-  class             /* single class */
-  {
-    $$ = single_Classes($1);
-    parse_results = $$;
-  }
-| class_list class	/* several classes */
-  { 
-    $$ = append_Classes($1, single_Classes($2)); 
-    parse_results = $$;
-  }
+  /* single class */
+  class			
+    {
+      $$ = single_Classes($1);
+      parse_results = $$;
+    }
+  /* several classes */
+| class_list class	
+    {
+      $$ = append_Classes($1, single_Classes($2)); 
+      parse_results = $$;
+    }
+  /* error recovery after bad class definition */
+| error class
+    {
+      $$ = single_Classes($2);
+      parse_results = $$;
+    }
 ;
 
+/* If no parent is specified, the class inherits from the Object class. */
 class:
-  /* basic class definition */
   CLASS TYPEID '{' feature_list '}' ';'
-  {
-    $$ = class_($2, idtable.add_string("Object"), $4,
-                stringtable.add_string(curr_filename));
-  }
-  /* class definition with a specified parent class */
+    {
+      $$ = class_($2, idtable.add_string("Object"), $4,
+                  stringtable.add_string(curr_filename));
+    }
 | CLASS TYPEID INHERITS TYPEID '{' feature_list '}' ';'
-  { $$ = class_($2, $4, $6, stringtable.add_string(curr_filename)); }
-  /* error recovery after bad class definition */
-| CLASS TYPEID error ';'
-  {}
-  /* error recovery after bad inherits */
-| CLASS TYPEID error '{' feature_list '}' ';'
-  {}
+    { $$ = class_($2, $4, $6, stringtable.add_string(curr_filename)); }
 ;
 
 /* Feature list may be empty, but no empty features in list. */
 feature_list:
   /* empty */
-  { $$ = nil_Features(); }
+    { $$ = nil_Features(); }
 | feature_list feature ';'
-  { $$ = append_Features($1, single_Features($2)); }
+    { $$ = append_Features($1, single_Features($2)); }
+  /* error recovery after a bad feature */
 | feature_list error ';'
-  { /* error recovery after a bad feature */ }
 ;
 
 feature:
-  /* attribute */
-  OBJECTID ':' TYPEID
-  { $$ = attr($1, $3, no_expr()); }
-  /* attribute with initialization */
-| OBJECTID ':' TYPEID ASSIGN expression
-  { $$ = attr($1, $3, $5); }
   /* method without formal parameters */
-| OBJECTID '(' ')' ':' TYPEID '{' expression '}'
-  { $$ = method($1, nil_Formals(), $5, $7); }
+  OBJECTID '(' ')' ':' TYPEID '{' expression '}'
+    { $$ = method($1, nil_Formals(), $5, $7); }
   /* method with formal parameters */
 | OBJECTID '(' formal_list ')' ':' TYPEID '{' expression '}'
-  { $$ = method($1, $3, $6, $8); }
+    { $$ = method($1, $3, $6, $8); }
+  /* attribute */
+| OBJECTID ':' TYPEID
+    { $$ = attr($1, $3, no_expr()); }
+  /* attribute with initialization */
+| OBJECTID ':' TYPEID ASSIGN expression
+    { $$ = attr($1, $3, $5); }
 ;
 
 formal_list:
-  formal                    /* single formal parameter */
-  { $$ = single_Formals($1); }
-| formal_list ',' formal    /* multiple formal parameters */
-  { $$ = append_Formals($1, single_Formals($3)); }
+  /* single formal parameter */
+  formal
+    { $$ = single_Formals($1); }
+  /* multiple formal parameters */
+| formal_list ',' formal
+    { $$ = append_Formals($1, single_Formals($3)); }
 ;
 
-formal:
-  OBJECTID ':' TYPEID
-  { $$ = formal($1, $3); }
+formal: OBJECTID ':' TYPEID
+    { $$ = formal($1, $3); }
 ;
 
 expression:
   /* assignment */
   OBJECTID ASSIGN expression
-  { $$ = assign($1, $3); }
+    { $$ = assign($1, $3); }
   /* dispatch on self */
 | OBJECTID dispatch_arguments
-  { $$ = dispatch(object(idtable.add_string("self")), $1, $2); }
+    { $$ = dispatch(object(idtable.add_string("self")), $1, $2); }
   /* object dispatch */
 | expression '.' OBJECTID dispatch_arguments
-  { $$ = dispatch($1, $3, $4); }
+    { $$ = dispatch($1, $3, $4); }
   /* static dispatch */
 | expression '@' TYPEID '.' OBJECTID dispatch_arguments
-  { $$ = static_dispatch($1, $3, $5, $6); }
+    { $$ = static_dispatch($1, $3, $5, $6); }
   /* conditional */
 | IF expression THEN expression ELSE expression FI
-  { $$ = cond($2, $4, $6); }
+    { $$ = cond($2, $4, $6); }
   /* loop */
 | WHILE expression LOOP expression POOL
-  { $$ = loop($2, $4); }
+    { $$ = loop($2, $4); }
   /* block */
 | '{' expression_list '}'
-  { $$ = block($2); }
+    { $$ = block($2); }
   /* let */
 | LET let_binding
-  { $$ = $2; }
+    { $$ = $2; }
   /* case */
 | CASE expression OF case_list ESAC
-  { $$ = typcase($2, $4); }
+    { $$ = typcase($2, $4); }
   /* new */
 | NEW TYPEID
-  { $$ = new_($2); }
+    { $$ = new_($2); }
   /* isvoid */
 | ISVOID expression
-  { $$ = isvoid($2); }
-  /* plus */
+    { $$ = isvoid($2); }
+  /* add */
 | expression '+' expression
-  { $$ = plus($1, $3); }
+    { $$ = plus($1, $3); }
   /* subtract */
 | expression '-' expression
-  { $$ = sub($1, $3); }
+    { $$ = sub($1, $3); }
   /* multiply */
 | expression '*' expression
-  { $$ = mul($1, $3); }
+    { $$ = mul($1, $3); }
   /* divide */
 | expression '/' expression
-  { $$ = divide($1, $3); }
-   /* integer complement */
+    { $$ = divide($1, $3); }
+  /* integer complement */
 | '~' expression
-  { $$ = neg($2); }
-  /* less than or equal to */
-| expression LE expression
-  { $$ = leq($1, $3); }
+    { $$ = neg($2); }
   /* less than */
 | expression '<' expression
-  { $$ = lt($1, $3); }
+    { $$ = lt($1, $3); }
+  /* less than or equal to */
+| expression LE expression
+    { $$ = leq($1, $3); }
   /* equals */
 | expression '=' expression
-  { $$ = eq($1, $3); }
+    { $$ = eq($1, $3); }
   /* boolean complement */
 | NOT expression
-  { $$ = comp($2); }
-  /* parentheses */                             
+    { $$ = comp($2); }
+  /* parentheses */
 | '(' expression ')'
-  { $$ = $2; }
+    { $$ = $2; }
   /* object identifier */
 | OBJECTID
-  { $$ = object($1); }
+    { $$ = object($1); }
   /* integer constant */
 | INT_CONST
-  { $$ = int_const($1); }
+    { $$ = int_const($1); }
   /* string constant */
 | STR_CONST
-  { $$ = string_const($1); }
+    { $$ = string_const($1); }
   /* boolean constant */
 | BOOL_CONST
-  { $$ = bool_const($1); }
+    { $$ = bool_const($1); }
 ;
 
 expression_list:
   /* single expression */
   expression ';'
-  { $$ = single_Expressions($1); }
+    { $$ = single_Expressions($1); }
   /* multiple expressions */
 | expression_list expression ';'
-  { $$ = append_Expressions($1, single_Expressions($2)); }
+    { $$ = append_Expressions($1, single_Expressions($2)); }
   /* error recovery after bad expression inside a block */
-| error ';'
-  {}
+| expression_list error ';'
 ;
 
 dispatch_arguments:
-  '(' ')'                       /* no arguments */
-  { $$ = nil_Expressions(); }
-| '(' argument_list ')'         /* one or more arguments */
-  { $$ = $2; }
+  /* no arguments */
+  '(' ')'
+    { $$ = nil_Expressions(); }
+  /* one or more arguments */
+| '(' actual_list ')'
+    { $$ = $2; }
 ;
 
-argument_list:
-  expression                    /* single actual parameter */
-  { $$ = single_Expressions($1); }
-| argument_list ',' expression  /* multiple actual parameters */
-  { $$ = append_Expressions($1, single_Expressions($3)); }
+actual_list:
+  /* single actual parameter */
+  expression
+    { $$ = single_Expressions($1); }
+  /* multiple actual parameters */
+| actual_list ',' expression
+    { $$ = append_Expressions($1, single_Expressions($3)); }
 ;
 
 let_binding:
-  /* single binding without initialization */
-  OBJECTID ':' TYPEID IN expression %prec LET
-  { $$ = let($1, $3, no_expr(), $5); }
-  /* single binding with initialization */
-| OBJECTID ':' TYPEID ASSIGN expression IN expression %prec LET
-  { $$ = let($1, $3, $5, $7); }
+  /* single or last binding without initialization */
+  OBJECTID ':' TYPEID IN expression %prec LET_STMT
+    { $$ = let($1, $3, no_expr(), $5); }
+  /* single or last binding with initialization */
+| OBJECTID ':' TYPEID ASSIGN expression IN expression %prec LET_STMT
+    { $$ = let($1, $3, $5, $7); }
   /* first binding in a list without initialization */
-| OBJECTID ':' TYPEID ',' let_binding %prec LET
-  { $$ = let($1, $3, no_expr(), $5); }
+| OBJECTID ':' TYPEID ',' let_binding
+    { $$ = let($1, $3, no_expr(), $5 ); }
   /* first binding in a list with initialization */
-| OBJECTID ':' TYPEID ASSIGN expression ',' let_binding %prec LET
-  { $$ = let($1, $3, $5, $7); }
+| OBJECTID ':' TYPEID ASSIGN expression ',' let_binding
+    { $$ = let($1, $3, $5, $7 ); }
   /* error recovery after a bad binding */
-| OBJECTID error ',' let_binding %prec LET
-  {}
+| error ',' let_binding
+    { $$ = $3; }
 ;
 
 case_list:
-  case                        /* single case */
-  { $$ = single_Cases($1); }
-| case_list case              /* multiple cases */
-  { $$ = append_Cases($1, single_Cases($2)); }
+  /* single case */
+  case
+    { $$ = single_Cases($1); }
+  /* multiple cases */
+| case_list case 
+    { $$ = append_Cases($1, single_Cases($2)); }
 ;
 
-case:
-  OBJECTID ':' TYPEID DARROW expression ';'
-  { $$ = branch($1, $3, $5); }
+case: OBJECTID ':' TYPEID DARROW expression ';'
+    { $$ = branch($1, $3, $5); }
 ;
 
 /* end of grammar */
 %%
-    
+
 /* This function is called automatically when Bison detects a parse error. */
 void yyerror(char *s)
 {
@@ -381,3 +387,4 @@ void yyerror(char *s)
   
   if(omerrs>50) {fprintf(stdout, "More than 50 errors\n"); exit(1);}
 }
+
