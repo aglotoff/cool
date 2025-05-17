@@ -86,7 +86,8 @@ void type_check(TypeEnvironment *);
 
 
 #define method_EXTRAS		\
-	Formals get_formals() { return formals; }
+	Formals get_formals() { return formals; }	\
+	Symbol get_return_type() { return return_type; } 
 
 #define Formal_EXTRAS                              	\
 virtual Symbol get_type() = 0;           						\
@@ -102,11 +103,13 @@ void dump_with_types(ostream&,int);
 
 #define Case_EXTRAS                             \
 virtual Symbol type_check(TypeEnvironment *) = 0;	\
+virtual Symbol get_type_decl() = 0;	\
 virtual void dump_with_types(ostream& ,int) = 0;
 
 
 #define branch_EXTRAS                                   \
 Symbol type_check(TypeEnvironment *);				 			\
+Symbol get_type_decl() { return type_decl; } \
 void dump_with_types(ostream& ,int);
 
 

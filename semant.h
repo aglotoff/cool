@@ -70,6 +70,7 @@ public:
   void add_child(InheritanceNode *);
   void mark_reachable();
   void init_env(ClassTableP);
+  TypeEnvironment *get_env() { return env; }
   void build_feature_tables();
   void check_main_method();
   void type_check();

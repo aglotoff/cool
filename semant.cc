@@ -117,6 +117,8 @@ void InheritanceNode::build_feature_tables()
   env->enter_object_scope();
   env->enter_method_scope();
 
+  env->add_object(self, SELF_TYPE);
+
   Features features = get_class()->get_features();
 
   for (int i = features->first(); features->more(i); i = features->next(i))
@@ -239,6 +241,9 @@ ostream& TypeEnvironment::semant_error(tree_node *t)
 
 bool TypeEnvironment::check_conformance(Symbol t1, Symbol t2)
 {
+  if (t2 == SELF_TYPE)
+    return t1 == SELF_TYPE;
+
   InheritanceNodeP n1 = lookup_class(t1);
   InheritanceNodeP n2 = lookup_class(t2);
 
@@ -277,15 +282,15 @@ ClassTable::ClassTable(Classes classes) :
   build_inheritance_tree();
   check_inheritance_cycles();
 
+  if (errors() > 0)
+    return;
+
   InheritanceNode *root = table->probe(Object);
   root->init_env(this);
   root->build_feature_tables();
 
   check_main();
-
   type_check();
-
-  //exit(0);
 }
 
 void ClassTable::install_basic_classes()
@@ -472,8 +477,8 @@ void ClassTable::check_inheritance_cycles()
     Class_ c = l->hd()->get_class();
     
     InheritanceNode *node = table->probe(c->get_name());
-
-    if (!node->is_reachable())
+ 
+    if (node->get_parent() && !node->is_reachable())
       semant_error(c) << "Class " << c->get_name() << ", or an ancestor of "
         << c->get_name() << ", is involved in an inheritance cycle."  << endl;
   }
@@ -568,6 +573,23 @@ void method_class::add_to_table(TypeEnvironment *env)
       << " is multiply defined." << endl;
     return;
   }
+
+  for (int i = formals->first(); formals->more(i); i = formals->next(i)) {
+    Symbol formal_name = formals->nth(i)->get_name();
+
+    if (formals->nth(i)->get_type() == SELF_TYPE) {
+      env->semant_error(this) << "Formal parameter " << formal_name 
+        << " cannot have type SELF_TYPE." << endl;
+    }
+
+    for (int j = formals->first(); i != j; j = formals->next(j)) {
+      if (formal_name == formals->nth(j)->get_name()) {
+        env->semant_error(this) << "Formal parameter " << formal_name
+          << " is multiply defined." << endl;
+        break;
+      }
+    }
+  }
   
   method_class *original = env->lookup_method(name);
   if (original != NULL) {
@@ -611,7 +633,13 @@ void method_class::type_check(TypeEnvironment *env)
 
   for (int i = formals->first(); formals->more(i); i = formals->next(i)) {
     Formal formal = formals->nth(i);
-    env->add_object(formal->get_name(), formal->get_type());
+
+    if (formal->get_name() == self) {
+      env->semant_error(this)
+        << "'self' cannot be the name of a formal parameter." << endl;
+    } else {
+      env->add_object(formal->get_name(), formal->get_type());
+    }
   }
 
   Symbol expr_type = expr->type_check(env);
@@ -670,7 +698,9 @@ Symbol assign_class::type_check(TypeEnvironment *env)
   Symbol t = expr->type_check(env);
   Symbol decl_t = env->lookup_object(name);
 
-  if (decl_t == NULL) {
+  if (name == self) {
+    env->semant_error(this) << "Cannot assign to 'self'." << endl;
+  } else if (decl_t == NULL) {
     env->semant_error(this) << "Assignment to undeclared variable " << name << "." << endl;
   } else if (!env->check_conformance(t, decl_t)) {
     env->semant_error(this) << "Type " << t
@@ -684,13 +714,53 @@ Symbol assign_class::type_check(TypeEnvironment *env)
 
 Symbol static_dispatch_class::type_check(TypeEnvironment *env)
 {
-  expr->type_check(env);
+  Symbol expr_type = expr->type_check(env);
 
   for (int i = actual->first(); actual->more(i); i = actual->next(i))
     actual->nth(i)->type_check(env);
 
-  // TODO
-  return No_type;
+  if (!env->check_conformance(expr_type, type_name)) {
+    env->semant_error(this) << "Expression type " << expr_type 
+      << " does not conform to declared static dispatch type " << type_name
+      << "." << endl;
+
+    set_type(Object);
+    return Object;
+  }
+
+  InheritanceNodeP node = env->lookup_class(type_name);
+  method_class *method = node->get_env()->lookup_method(name);
+  if (method == NULL) {
+    env->semant_error(this) << "Dispatch to undefined method " << name << "."
+      << endl;
+
+    set_type(Object);
+    return Object;
+  }
+
+  Formals formals = method->get_formals();
+  if (formals->len() != actual->len()) {
+    env->semant_error(this) << "Method " << name
+      << " called with wrong number of arguments." << endl;
+  }
+
+  for (int i = formals->first(), j = actual->first();
+       formals->more(i) && actual->more(j);
+       i = formals->next(i), j = actual->next(j)) {
+    Symbol formal_type = formals->nth(i)->get_type();
+    Symbol actual_type = actual->nth(j)->get_type();
+
+    if (!env->check_conformance(actual_type, formal_type)) {
+      env->semant_error(this) << "In call of method " << name
+        << ", type " << actual_type << " of parameter "
+        << formals->nth(i)->get_name() << " does not conform to declared type "
+        << formal_type << "." << endl;
+    }
+  }
+
+  Symbol return_type = method->get_return_type();
+  set_type(return_type == SELF_TYPE ? expr_type : return_type);
+  return get_type();
 }
 
 Symbol dispatch_class::type_check(TypeEnvironment *env)
@@ -700,8 +770,39 @@ Symbol dispatch_class::type_check(TypeEnvironment *env)
   for (int i = actual->first(); actual->more(i); i = actual->next(i))
     actual->nth(i)->type_check(env);
 
-  // TODO
-  return No_type;
+  InheritanceNodeP node = env->lookup_class(expr_type);
+  method_class *method = node->get_env()->lookup_method(name);
+  if (method == NULL) {
+    env->semant_error(this) << "Dispatch to undefined method " << name << "."
+      << endl;
+
+    set_type(Object);
+    return Object;
+  }
+
+  Formals formals = method->get_formals();
+  if (formals->len() != actual->len()) {
+    env->semant_error(this) << "Method " << name
+      << " called with wrong number of arguments." << endl;
+  }
+
+  for (int i = formals->first(), j = actual->first();
+       formals->more(i) && actual->more(j);
+       i = formals->next(i), j = actual->next(j)) {
+    Symbol formal_type = formals->nth(i)->get_type();
+    Symbol actual_type = actual->nth(j)->get_type();
+
+    if (!env->check_conformance(actual_type, formal_type)) {
+      env->semant_error(this) << "In call of method " << name
+        << ", type " << actual_type << " of parameter "
+        << formals->nth(i)->get_name() << " does not conform to declared type "
+        << formal_type << "." << endl;
+    }
+  }
+
+  Symbol return_type = method->get_return_type();
+  set_type(return_type == SELF_TYPE ? expr_type : return_type);
+  return get_type();
 }
 
 Symbol cond_class::type_check(TypeEnvironment *env)
@@ -739,7 +840,17 @@ Symbol typcase_class::type_check(TypeEnvironment *env)
   Symbol lub_type = No_type;
 
   for (int i = cases->first(); cases->more(i); i = cases->next(i)) {
-    Symbol t = cases->nth(i)->type_check(env);
+    Case c = cases->nth(i);
+
+    for (int j = cases->first(); j != i; j = cases->next(j)) {
+      if (c->get_type_decl() == cases->nth(j)->get_type_decl()) {
+        env->semant_error(this) << "Duplicate branch " << c->get_type_decl()
+          << " in case statement." << endl;
+        break;
+      }
+    }
+
+    Symbol t = c->type_check(env);
     lub_type = (lub_type == No_type) ? t : env->get_lub(lub_type, t);
   }
 
@@ -874,9 +985,11 @@ Symbol eq_class::type_check(TypeEnvironment *env)
   Symbol t1 = e1->type_check(env);
   Symbol t2 = e2->type_check(env);
 
-  if ((t1 != Int) || (t2 != Int)) {
-    env->semant_error(this) << "non-Int arguments: " << t1 << " = " << t2
-      << endl;
+  InheritanceNodeP n1 = env->lookup_class(t1);
+  InheritanceNodeP n2 = env->lookup_class(t2);
+
+  if (n1 != n2 && (!n1->is_inheritable() || !n2->is_inheritable())) {
+    env->semant_error(this) << "Illegal comparison with a basic type" << endl;
   }
 
   set_type(Bool);
