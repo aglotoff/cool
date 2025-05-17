@@ -6,7 +6,6 @@
 #include "semant.h"
 #include "utilities.h"
 
-
 extern int semant_debug;
 extern char *curr_filename;
 
@@ -81,6 +80,276 @@ static void initialize_constants(void)
   val         = idtable.add_string("_val");
 }
 
+ClassTable::ClassTable(Classes classes):
+    list(NULL),
+    table(new SymbolTable<Symbol, InheritanceNode>()),
+    semant_errors(0),
+    error_stream(cerr)
+{
+  table->enterscope();
+
+  install_self_type();
+  install_basic_classes();
+  install_classes(classes);
+
+  check_inheritance();
+  build_inheritance_tree();
+  check_inheritance_cycles();
+
+  if (errors() > 0)
+    return;
+
+  InheritanceNode *root = table->probe(Object);
+  root->init_env(this);
+  root->build_feature_tables();
+
+  check_main();
+  check_types();
+}
+
+void ClassTable::install_basic_classes()
+{
+  // The tree package uses these globals to annotate the classes built below.
+  // curr_lineno  = 0;
+  Symbol filename = stringtable.add_string("<basic class>");
+  
+  // The following demonstrates how to create dummy parse trees to
+  // refer to basic Cool classes.  There's no need for method
+  // bodies -- these are already built into the runtime system.
+  
+  // 
+  // The Object class has no parent class. Its methods are
+  //    abort() : Object  aborts the program
+  //    type_name() : Str   returns a string representation of class name
+  //    copy() : SELF_TYPE  returns a copy of the object
+  //
+  // There is no need for method bodies in the basic classes---these
+  // are already built in to the runtime system.
+
+  Class_ Object_class =
+    class_(Object, 
+      No_class,
+      append_Features(
+        append_Features(
+          single_Features(method(cool_abort, nil_Formals(), Object, no_expr())),
+          single_Features(method(type_name, nil_Formals(), Str, no_expr()))),
+        single_Features(method(copy, nil_Formals(), SELF_TYPE, no_expr()))),
+      filename);
+
+  // 
+  // The IO class inherits from Object. Its methods are
+  //    out_string(Str) : SELF_TYPE     writes a string to the output
+  //    out_int(Int) : SELF_TYPE        "      an int   "  "   "
+  //    in_string() : Str               reads a string from the input
+  //    in_int() : Int                  "     an int   "    "   "
+  //
+  Class_ IO_class = 
+  class_(IO, 
+    Object,
+    append_Features(
+      append_Features(
+        append_Features(
+          single_Features(method(out_string, single_Formals(formal(arg, Str)),
+            SELF_TYPE, no_expr())),
+          single_Features(method(out_int, single_Formals(formal(arg, Int)),
+                        SELF_TYPE, no_expr()))),
+        single_Features(method(in_string, nil_Formals(), Str, no_expr()))),
+      single_Features(method(in_int, nil_Formals(), Int, no_expr()))),
+    filename);  
+
+  //
+  // The Int class has no methods and only a single attribute, the
+  // "val" for the integer. 
+  //
+  Class_ Int_class =
+    class_(Int, 
+      Object,
+      single_Features(attr(val, prim_slot, no_expr())),
+      filename);
+
+  //
+  // Bool also has only the "val" slot.
+  //
+  Class_ Bool_class =
+    class_(Bool,
+      Object,
+      single_Features(attr(val, prim_slot, no_expr())),
+      filename);
+
+  //
+  // The class Str has a number of slots and operations:
+  //     val                                the length of the string
+  //     str_field                          the string itself
+  //     length() : Int                     returns length of the string
+  //     concat(arg: Str) : Str             performs string concatenation
+  //     substr(arg: Int, arg2: Int): Str   substring selection
+  //     
+  Class_ Str_class =
+    class_(Str, 
+      Object,
+      append_Features(
+        append_Features(
+          append_Features(
+            append_Features(
+              single_Features(attr(val, Int, no_expr())),
+              single_Features(attr(str_field, prim_slot, no_expr()))),
+            single_Features(method(length, nil_Formals(), Int, no_expr()))),
+          single_Features(method(concat, 
+            single_Formals(formal(arg, Str)),
+            Str, 
+            no_expr()))),
+        single_Features(method(substr, 
+          append_Formals(single_Formals(formal(arg, Int)), 
+            single_Formals(formal(arg2, Int))),
+          Str, 
+          no_expr()))),
+      filename);
+
+  install_class(new InheritanceNode(Object_class, true, true));
+  install_class(new InheritanceNode(IO_class, true, true));
+  install_class(new InheritanceNode(Int_class, true, false));
+  install_class(new InheritanceNode(Bool_class, true, false));
+  install_class(new InheritanceNode(Str_class, true, false));
+}
+
+void ClassTable::install_classes(Classes classes)
+{
+  for (int i = classes->first(); classes->more(i); i = classes->next(i))
+    install_class(new InheritanceNode(classes->nth(i), false, true));
+}
+
+void ClassTable::install_class(InheritanceNode *node)
+{
+  Class_ c = node->get_class();
+  Symbol name = c->get_name();
+
+  InheritanceNode *prev_node = table->probe(name);
+
+  if (prev_node != NULL) {
+    if (prev_node->is_basic())
+      semant_error(c) << "Redefinition of basic class " << name << "." << endl;
+    else
+      semant_error(c) << "Class " << name << " was previously defined." << endl;
+    return;
+  }
+  
+  if (c != NULL)
+    list = new List<InheritanceNode>(node, list);
+
+  table->addid(name, node);
+}
+
+void ClassTable::install_self_type()
+{
+  table->addid(SELF_TYPE, new InheritanceNode(NULL, true, false));
+}
+
+void ClassTable::check_inheritance()
+{
+  for (List<InheritanceNode> *l = list; l != NULL; l = l->tl()) {
+    Class_ c = l->hd()->get_class();
+    Symbol name = c->get_name();
+    Symbol parent = c->get_parent();
+
+    if (parent == No_class)
+      continue;
+    
+    InheritanceNode *parent_node = table->probe(parent);
+    if (parent_node == NULL) {
+      semant_error(c) << "Class " << name
+        << " inherits from an undefined class " << parent << "." << endl;
+    } else if (!parent_node->is_inheritable()) {
+      semant_error(c) << "Class " << name 
+        << " cannot inherit class " << parent << "." << endl;
+    }
+  }
+}
+
+void ClassTable::build_inheritance_tree()
+{
+  for (List<InheritanceNode> *l = list; l != NULL; l = l->tl()) {
+    Class_ c = l->hd()->get_class();
+    
+    InheritanceNode *node = table->probe(c->get_name());
+    InheritanceNode *parent_node = table->probe(c->get_parent());
+
+    if (node != NULL && parent_node != NULL) {
+      node->set_parent(parent_node);
+      parent_node->add_child(node);
+    }
+  }
+}
+
+void ClassTable::check_inheritance_cycles()
+{
+  InheritanceNode *root = table->probe(Object);
+  root->mark_reachable();
+
+  for (List<InheritanceNode> *l = list; l != NULL; l = l->tl()) {
+    Class_ c = l->hd()->get_class();
+    
+    InheritanceNode *node = table->probe(c->get_name());
+ 
+    if (node->get_parent() && !node->is_reachable())
+      semant_error(c) << "Class " << c->get_name() << ", or an ancestor of "
+        << c->get_name() << ", is involved in an inheritance cycle."  << endl;
+  }
+}
+
+void ClassTable::check_main()
+{
+  InheritanceNodeP main_node = table->probe(Main);
+  if (main_node == NULL) {
+    semant_error() << "Class Main is not defined." << endl;
+    return;
+  }
+
+  main_node->check_main_method();
+}
+
+void ClassTable::check_types()
+{
+  for (List<InheritanceNode> *l = list; l != NULL; l = l->tl())
+    l->hd()->check_type();
+}
+
+InheritanceNode *ClassTable::lookup(Symbol name)
+{
+  return table->probe(name);
+}
+
+////////////////////////////////////////////////////////////////////
+//
+// semant_error is an overloaded function for reporting errors
+// during semantic analysis.  There are three versions:
+//
+//    ostream& ClassTable::semant_error()        
+//
+//    ostream& ClassTable::semant_error(Class_ c)
+//     print line number and filename for `c'
+//
+//    ostream& ClassTable::semant_error(Symbol filename, tree_node *t)  
+//       print a line number and filename
+//
+///////////////////////////////////////////////////////////////////
+
+ostream& ClassTable::semant_error(Class_ c)
+{                                                             
+  return semant_error(c->get_filename(),c);
+}  
+
+ostream& ClassTable::semant_error(Symbol filename, tree_node *t)
+{
+  error_stream << filename << ":" << t->get_line_number() << ": ";
+  return semant_error();
+}
+
+ostream& ClassTable::semant_error()          
+{                         
+  semant_errors++;              
+  return error_stream;
+} 
+
 InheritanceNode::InheritanceNode(Class_ c, bool b, bool i):
   class_(c),
   basic(b),
@@ -148,7 +417,7 @@ void InheritanceNode::check_main_method()
   }
 }
 
-void InheritanceNode::type_check()
+void InheritanceNode::check_type()
 {
   if (is_basic())
     return;
@@ -156,7 +425,7 @@ void InheritanceNode::type_check()
   Features features = get_class()->get_features();
 
   for (int i = features->first(); features->more(i); i = features->next(i))
-    features->nth(i)->type_check(env);
+    features->nth(i)->check_type(env);
 }
 
 TypeEnvironment::TypeEnvironment(ClassTableP t, InheritanceNodeP n):
@@ -266,278 +535,6 @@ Symbol TypeEnvironment::get_lub(Symbol t1, Symbol t2)
   return n1->get_class()->get_name();
 }
 
-ClassTable::ClassTable(Classes classes) :
-    list(NULL),
-    table(new SymbolTable<Symbol, InheritanceNode>()),
-    semant_errors(0),
-    error_stream(cerr)
-{
-  table->enterscope();
-
-  install_self_type();
-  install_basic_classes();
-  install_classes(classes);
-
-  check_inheritance();
-  build_inheritance_tree();
-  check_inheritance_cycles();
-
-  if (errors() > 0)
-    return;
-
-  InheritanceNode *root = table->probe(Object);
-  root->init_env(this);
-  root->build_feature_tables();
-
-  check_main();
-  type_check();
-}
-
-void ClassTable::install_basic_classes()
-{
-  // The tree package uses these globals to annotate the classes built below.
-  // curr_lineno  = 0;
-  Symbol filename = stringtable.add_string("<basic class>");
-  
-  // The following demonstrates how to create dummy parse trees to
-  // refer to basic Cool classes.  There's no need for method
-  // bodies -- these are already built into the runtime system.
-  
-  // IMPORTANT: The results of the following expressions are
-  // stored in local variables.  You will want to do something
-  // with those variables at the end of this method to make this
-  // code meaningful.
-
-  // 
-  // The Object class has no parent class. Its methods are
-  //    abort() : Object  aborts the program
-  //    type_name() : Str   returns a string representation of class name
-  //    copy() : SELF_TYPE  returns a copy of the object
-  //
-  // There is no need for method bodies in the basic classes---these
-  // are already built in to the runtime system.
-
-  Class_ Object_class =
-    class_(Object, 
-      No_class,
-      append_Features(
-        append_Features(
-          single_Features(method(cool_abort, nil_Formals(), Object, no_expr())),
-          single_Features(method(type_name, nil_Formals(), Str, no_expr()))),
-        single_Features(method(copy, nil_Formals(), SELF_TYPE, no_expr()))),
-    filename);
-
-  // 
-  // The IO class inherits from Object. Its methods are
-  //    out_string(Str) : SELF_TYPE     writes a string to the output
-  //    out_int(Int) : SELF_TYPE      "  an int  "  "   "
-  //    in_string() : Str         reads a string from the input
-  //    in_int() : Int            "   an int   "  "   "
-  //
-  Class_ IO_class = 
-  class_(IO, 
-    Object,
-    append_Features(
-      append_Features(
-        append_Features(
-          single_Features(method(out_string, single_Formals(formal(arg, Str)),
-            SELF_TYPE, no_expr())),
-          single_Features(method(out_int, single_Formals(formal(arg, Int)),
-                        SELF_TYPE, no_expr()))),
-        single_Features(method(in_string, nil_Formals(), Str, no_expr()))),
-      single_Features(method(in_int, nil_Formals(), Int, no_expr()))),
-    filename);  
-
-  //
-  // The Int class has no methods and only a single attribute, the
-  // "val" for the integer. 
-  //
-  Class_ Int_class =
-  class_(Int, 
-    Object,
-    single_Features(attr(val, prim_slot, no_expr())),
-    filename);
-
-  //
-  // Bool also has only the "val" slot.
-  //
-  Class_ Bool_class =
-    class_(Bool, Object, single_Features(attr(val, prim_slot, no_expr())),filename);
-
-  //
-  // The class Str has a number of slots and operations:
-  //     val                  the length of the string
-  //     str_field              the string itself
-  //     length() : Int             returns length of the string
-  //     concat(arg: Str) : Str         performs string concatenation
-  //     substr(arg: Int, arg2: Int): Str   substring selection
-  //     
-  Class_ Str_class =
-  class_(Str, 
-    Object,
-    append_Features(
-      append_Features(
-        append_Features(
-          append_Features(
-            single_Features(attr(val, Int, no_expr())),
-            single_Features(attr(str_field, prim_slot, no_expr()))),
-          single_Features(method(length, nil_Formals(), Int, no_expr()))),
-        single_Features(method(concat, 
-          single_Formals(formal(arg, Str)),
-          Str, 
-          no_expr()))),
-      single_Features(method(substr, 
-        append_Formals(single_Formals(formal(arg, Int)), 
-          single_Formals(formal(arg2, Int))),
-        Str, 
-        no_expr()))),
-    filename);
-
-  install_class(new InheritanceNode(Object_class, true, true));
-  install_class(new InheritanceNode(IO_class, true, true));
-  install_class(new InheritanceNode(Int_class, true, false));
-  install_class(new InheritanceNode(Bool_class, true, false));
-  install_class(new InheritanceNode(Str_class, true, false));
-}
-
-void ClassTable::install_classes(Classes classes)
-{
-  for (int i = classes->first(); classes->more(i); i = classes->next(i))
-    install_class(new InheritanceNode(classes->nth(i), false, true));
-}
-
-void ClassTable::install_class(InheritanceNode *node)
-{
-  Class_ c = node->get_class();
-  Symbol name = c->get_name();
-
-  InheritanceNode *prev_node = table->probe(name);
-
-  if (prev_node != NULL) {
-    if (prev_node->is_basic())
-      semant_error(c) << "Redefinition of basic class " << name << "." << endl;
-    else
-      semant_error(c) << "Class " << name << " was previously defined." << endl;
-    return;
-  }
-  
-  if (c != NULL)
-    list = new List<InheritanceNode>(node, list);
-
-  table->addid(name, node);
-}
-
-void ClassTable::install_self_type()
-{
-  table->addid(SELF_TYPE, new InheritanceNode(NULL, true, false));
-}
-
-void ClassTable::check_inheritance()
-{
-  for (List<InheritanceNode> *l = list; l != NULL; l = l->tl()) {
-    Class_ c = l->hd()->get_class();
-    Symbol name = c->get_name();
-    Symbol parent = c->get_parent();
-
-    if (parent == No_class)
-      continue;
-    
-    InheritanceNode *parent_node = table->probe(parent);
-    if (parent_node == NULL) {
-      semant_error(c) << "Class " << name
-        << " inherits from an undefined class " << parent << "." << endl;
-    } else if (!parent_node->is_inheritable()) {
-      semant_error(c) << "Class " << name 
-        << " cannot inherit class " << parent << "." << endl;
-    }
-  }
-}
-
-void ClassTable::build_inheritance_tree()
-{
-  for (List<InheritanceNode> *l = list; l != NULL; l = l->tl()) {
-    Class_ c = l->hd()->get_class();
-    
-    InheritanceNode *node = table->probe(c->get_name());
-    InheritanceNode *parent_node = table->probe(c->get_parent());
-
-    if (node != NULL && parent_node != NULL) {
-      node->set_parent(parent_node);
-      parent_node->add_child(node);
-    }
-  }
-}
-
-void ClassTable::check_inheritance_cycles()
-{
-  InheritanceNode *root = table->probe(Object);
-  root->mark_reachable();
-
-  for (List<InheritanceNode> *l = list; l != NULL; l = l->tl()) {
-    Class_ c = l->hd()->get_class();
-    
-    InheritanceNode *node = table->probe(c->get_name());
- 
-    if (node->get_parent() && !node->is_reachable())
-      semant_error(c) << "Class " << c->get_name() << ", or an ancestor of "
-        << c->get_name() << ", is involved in an inheritance cycle."  << endl;
-  }
-}
-
-void ClassTable::check_main()
-{
-  InheritanceNodeP main_node = table->probe(Main);
-  if (main_node == NULL) {
-    semant_error() << "Class Main is not defined." << endl;
-    return;
-  }
-
-  main_node->check_main_method();
-}
-
-void ClassTable::type_check()
-{
-  for (List<InheritanceNode> *l = list; l != NULL; l = l->tl())
-    l->hd()->type_check();
-}
-
-InheritanceNode *ClassTable::lookup(Symbol name)
-{
-  return table->probe(name);
-}
-
-////////////////////////////////////////////////////////////////////
-//
-// semant_error is an overloaded function for reporting errors
-// during semantic analysis.  There are three versions:
-//
-//    ostream& ClassTable::semant_error()        
-//
-//    ostream& ClassTable::semant_error(Class_ c)
-//     print line number and filename for `c'
-//
-//    ostream& ClassTable::semant_error(Symbol filename, tree_node *t)  
-//       print a line number and filename
-//
-///////////////////////////////////////////////////////////////////
-
-ostream& ClassTable::semant_error(Class_ c)
-{                                                             
-  return semant_error(c->get_filename(),c);
-}  
-
-ostream& ClassTable::semant_error(Symbol filename, tree_node *t)
-{
-  error_stream << filename << ":" << t->get_line_number() << ": ";
-  return semant_error();
-}
-
-ostream& ClassTable::semant_error()          
-{                         
-  semant_errors++;              
-  return error_stream;
-} 
-
 /*   This is the entry point to the semantic checker.
 
      Your checker should do the following two things:
@@ -627,7 +624,7 @@ void method_class::add_to_table(TypeEnvironment *env)
   env->add_method(name, this);
 }
 
-void method_class::type_check(TypeEnvironment *env)
+void method_class::check_type(TypeEnvironment *env)
 {
   env->enter_object_scope();
 
@@ -642,7 +639,7 @@ void method_class::type_check(TypeEnvironment *env)
     }
   }
 
-  Symbol expr_type = expr->type_check(env);
+  Symbol expr_type = expr->check_type(env);
 
   if (!env->check_conformance(expr_type, return_type)) {
     env->semant_error(this) << "Inferred return type " << expr_type
@@ -676,26 +673,32 @@ void attr_class::add_to_table(TypeEnvironment *env)
   env->add_object(name, type_decl);
 }
 
-void attr_class::type_check(TypeEnvironment *env)
+void attr_class::check_type(TypeEnvironment *env)
 {
-  init->type_check(env);
+  init->check_type(env);
 }
 
-Symbol branch_class::type_check(TypeEnvironment *env)
+Symbol branch_class::check_type(TypeEnvironment *env)
 {
   env->enter_object_scope();
   env->add_object(name, type_decl);
 
-  Symbol t = expr->type_check(env);
+  Symbol t = expr->check_type(env);
 
   env->exit_object_scope();
 
   return t;
 }
 
-Symbol assign_class::type_check(TypeEnvironment *env)
+Symbol Expression_class::check_type(TypeEnvironment *env)
 {
-  Symbol t = expr->type_check(env);
+  set_type(infer_type(env));
+  return type;
+}
+
+Symbol assign_class::infer_type(TypeEnvironment *env)
+{
+  Symbol t = expr->check_type(env);
   Symbol decl_t = env->lookup_object(name);
 
   if (name == self) {
@@ -708,23 +711,20 @@ Symbol assign_class::type_check(TypeEnvironment *env)
       << decl_t << " of identifier " << name << "." << endl;
   }
 
-  set_type(t);
   return t;
 }
 
-Symbol static_dispatch_class::type_check(TypeEnvironment *env)
+Symbol static_dispatch_class::infer_type(TypeEnvironment *env)
 {
-  Symbol expr_type = expr->type_check(env);
+  Symbol expr_type = expr->check_type(env);
 
   for (int i = actual->first(); actual->more(i); i = actual->next(i))
-    actual->nth(i)->type_check(env);
+    actual->nth(i)->check_type(env);
 
   if (!env->check_conformance(expr_type, type_name)) {
     env->semant_error(this) << "Expression type " << expr_type 
       << " does not conform to declared static dispatch type " << type_name
       << "." << endl;
-
-    set_type(Object);
     return Object;
   }
 
@@ -733,8 +733,6 @@ Symbol static_dispatch_class::type_check(TypeEnvironment *env)
   if (method == NULL) {
     env->semant_error(this) << "Dispatch to undefined method " << name << "."
       << endl;
-
-    set_type(Object);
     return Object;
   }
 
@@ -759,24 +757,21 @@ Symbol static_dispatch_class::type_check(TypeEnvironment *env)
   }
 
   Symbol return_type = method->get_return_type();
-  set_type(return_type == SELF_TYPE ? expr_type : return_type);
-  return get_type();
+  return return_type == SELF_TYPE ? expr_type : return_type;
 }
 
-Symbol dispatch_class::type_check(TypeEnvironment *env)
+Symbol dispatch_class::infer_type(TypeEnvironment *env)
 {
-  Symbol expr_type = expr->type_check(env);
+  Symbol expr_type = expr->check_type(env);
 
   for (int i = actual->first(); actual->more(i); i = actual->next(i))
-    actual->nth(i)->type_check(env);
+    actual->nth(i)->check_type(env);
 
   InheritanceNodeP node = env->lookup_class(expr_type);
   method_class *method = node->get_env()->lookup_method(name);
   if (method == NULL) {
     env->semant_error(this) << "Dispatch to undefined method " << name << "."
       << endl;
-
-    set_type(Object);
     return Object;
   }
 
@@ -801,41 +796,38 @@ Symbol dispatch_class::type_check(TypeEnvironment *env)
   }
 
   Symbol return_type = method->get_return_type();
-  set_type(return_type == SELF_TYPE ? expr_type : return_type);
-  return get_type();
+  return return_type == SELF_TYPE ? expr_type : return_type;
 }
 
-Symbol cond_class::type_check(TypeEnvironment *env)
+Symbol cond_class::infer_type(TypeEnvironment *env)
 {
-  Symbol pred_type = pred->type_check(env);
+  Symbol pred_type = pred->check_type(env);
   if (pred_type != Bool) {
     env->semant_error(this) << "Predicate of 'if' does not have type Bool."
       << endl;
   }
 
-  Symbol then_type = then_exp->type_check(env);
-  Symbol else_type = else_exp->type_check(env);
+  Symbol then_type = then_exp->check_type(env);
+  Symbol else_type = else_exp->check_type(env);
 
-  set_type(env->get_lub(then_type, else_type));
-  return get_type();
+  return env->get_lub(then_type, else_type);
 }
 
-Symbol loop_class::type_check(TypeEnvironment *env)
+Symbol loop_class::infer_type(TypeEnvironment *env)
 {
-  if (pred->type_check(env) != Bool) {
+  if (pred->check_type(env) != Bool) {
     env->semant_error(this) << "Loop condition does not have type Bool."
       << endl;
   }
 
-  body->type_check(env);
+  body->check_type(env);
 
-  set_type(Object);
   return Object;
 }
 
-Symbol typcase_class::type_check(TypeEnvironment *env)
+Symbol typcase_class::infer_type(TypeEnvironment *env)
 {
-  expr->type_check(env);
+  expr->check_type(env);
 
   Symbol lub_type = No_type;
 
@@ -850,30 +842,28 @@ Symbol typcase_class::type_check(TypeEnvironment *env)
       }
     }
 
-    Symbol t = c->type_check(env);
+    Symbol t = c->check_type(env);
     lub_type = (lub_type == No_type) ? t : env->get_lub(lub_type, t);
   }
 
-  set_type(lub_type);
   return lub_type;
 }
 
-Symbol block_class::type_check(TypeEnvironment *env)
+Symbol block_class::infer_type(TypeEnvironment *env)
 {
   Symbol last_type = Object;
 
   for (int i = body->first(); body->more(i); i = body->next(i))
-    last_type = body->nth(i)->type_check(env);
+    last_type = body->nth(i)->check_type(env);
 
-  set_type(last_type);
   return last_type;
 }
 
-Symbol let_class::type_check(TypeEnvironment *env)
+Symbol let_class::infer_type(TypeEnvironment *env)
 {
   env->enter_object_scope();
 
-  Symbol init_type = init->type_check(env);
+  Symbol init_type = init->check_type(env);
 
   if (identifier == self) {
     env->semant_error(this) << "'self' cannot be bound in a 'let' expression."
@@ -889,101 +879,94 @@ Symbol let_class::type_check(TypeEnvironment *env)
     env->add_object(identifier, type_decl);
   }
 
-  Symbol body_type = body->type_check(env);
+  Symbol body_type = body->check_type(env);
 
   env->exit_object_scope();
 
-  set_type(body_type);
   return body_type;
 }
 
-Symbol plus_class::type_check(TypeEnvironment *env)
+Symbol plus_class::infer_type(TypeEnvironment *env)
 {
-  Symbol t1 = e1->type_check(env);
-  Symbol t2 = e2->type_check(env);
+  Symbol t1 = e1->check_type(env);
+  Symbol t2 = e2->check_type(env);
 
   if ((t1 != Int) || (t2 != Int)) {
     env->semant_error(this) << "non-Int arguments: " << t1 << " + " << t2
       << endl;
   }
 
-  set_type(Int);
   return Int;
 }
 
-Symbol sub_class::type_check(TypeEnvironment *env)
+Symbol sub_class::infer_type(TypeEnvironment *env)
 {
-  Symbol t1 = e1->type_check(env);
-  Symbol t2 = e2->type_check(env);
+  Symbol t1 = e1->check_type(env);
+  Symbol t2 = e2->check_type(env);
 
   if ((t1 != Int) || (t2 != Int)) {
     env->semant_error(this) << "non-Int arguments: " << t1 << " - " << t2
       << endl;
   }
 
-  set_type(Int);
   return Int;
 }
 
-Symbol mul_class::type_check(TypeEnvironment *env)
+Symbol mul_class::infer_type(TypeEnvironment *env)
 {
-  Symbol t1 = e1->type_check(env);
-  Symbol t2 = e2->type_check(env);
+  Symbol t1 = e1->check_type(env);
+  Symbol t2 = e2->check_type(env);
 
   if ((t1 != Int) || (t2 != Int)) {
     env->semant_error(this) << "non-Int arguments: " << t1 << " * " << t2
       << endl;
   }
 
-  set_type(Int);
   return Int;
 }
 
-Symbol divide_class::type_check(TypeEnvironment *env)
+Symbol divide_class::infer_type(TypeEnvironment *env)
 {
-  Symbol t1 = e1->type_check(env);
-  Symbol t2 = e2->type_check(env);
+  Symbol t1 = e1->check_type(env);
+  Symbol t2 = e2->check_type(env);
 
   if ((t1 != Int) || (t2 != Int)) {
     env->semant_error(this) << "non-Int arguments: " << t1 << " / " << t2
       << endl;
   }
 
-  set_type(Int);
   return Int;
 }
 
-Symbol neg_class::type_check(TypeEnvironment *env)
+Symbol neg_class::infer_type(TypeEnvironment *env)
 {
-  Symbol t1 = e1->type_check(env);
+  Symbol t1 = e1->check_type(env);
 
   if (t1 != Int) {
     env->semant_error(this) << "Argument of '~' has type " << t1
       << " instead of Int." << endl;
   }
 
-  set_type(Int);
   return Int;
 }
 
-Symbol lt_class::type_check(TypeEnvironment *env)
+Symbol lt_class::infer_type(TypeEnvironment *env)
 {
-  Symbol t1 = e1->type_check(env);
-  Symbol t2 = e2->type_check(env);
+  Symbol t1 = e1->check_type(env);
+  Symbol t2 = e2->check_type(env);
 
   if ((t1 != Int) || (t2 != Int)) {
     env->semant_error(this) << "non-Int arguments: " << t1 << " < " << t2
       << endl;
   }
 
-  set_type(Bool);
   return Bool;
 }
 
-Symbol eq_class::type_check(TypeEnvironment *env)
+Symbol eq_class::infer_type(TypeEnvironment *env)
 {
-  Symbol t1 = e1->type_check(env);
-  Symbol t2 = e2->type_check(env);
+  Symbol t1 = e1->check_type(env);
+  Symbol t2 = e2->check_type(env);
 
   InheritanceNodeP n1 = env->lookup_class(t1);
   InheritanceNodeP n2 = env->lookup_class(t2);
@@ -992,94 +975,80 @@ Symbol eq_class::type_check(TypeEnvironment *env)
     env->semant_error(this) << "Illegal comparison with a basic type" << endl;
   }
 
-  set_type(Bool);
   return Bool;
 }
 
-Symbol leq_class::type_check(TypeEnvironment *env)
+Symbol leq_class::infer_type(TypeEnvironment *env)
 {
-  Symbol t1 = e1->type_check(env);
-  Symbol t2 = e2->type_check(env);
+  Symbol t1 = e1->check_type(env);
+  Symbol t2 = e2->check_type(env);
 
   if ((t1 != Int) || (t2 != Int)) {
     env->semant_error(this) << "non-Int arguments: " << t1 << " <= " << t2
       << endl;
   }
 
-  set_type(Bool);
   return Bool;
 }
 
-Symbol comp_class::type_check(TypeEnvironment *env)
+Symbol comp_class::infer_type(TypeEnvironment *env)
 {
-  Symbol t1 = e1->type_check(env);
+  Symbol t1 = e1->check_type(env);
 
   if (t1 != Bool) {
     env->semant_error(this) << "Argument of 'not' has type " << t1
       << " instead of Bool." << endl;
   }
 
-  set_type(Bool);
   return Bool;
 }
 
-Symbol int_const_class::type_check(TypeEnvironment *env)
+Symbol int_const_class::infer_type(TypeEnvironment *env)
 {
-  set_type(Int);
   return Int;
 }
 
-Symbol bool_const_class::type_check(TypeEnvironment *env)
+Symbol bool_const_class::infer_type(TypeEnvironment *env)
 {
-  set_type(Bool);
   return Bool;
 }
 
-Symbol string_const_class::type_check(TypeEnvironment *env)
+Symbol string_const_class::infer_type(TypeEnvironment *env)
 {
-  set_type(Str);
   return Str;
 }
 
-Symbol new__class::type_check(TypeEnvironment *env)
+Symbol new__class::infer_type(TypeEnvironment *env)
 {
   if (env->lookup_class(type_name) != NULL) {
-    set_type(type_name);
     return type_name;
   }
 
   env->semant_error(this) << "'new' used with undefined class " << type_name
     << "." << endl;
 
-  set_type(Object);
   return Object;
 }
 
-Symbol isvoid_class::type_check(TypeEnvironment *env)
+Symbol isvoid_class::infer_type(TypeEnvironment *env)
 {
-  e1->type_check(env);
-
-  set_type(Bool);
+  e1->check_type(env);
   return Bool;
 }
 
-Symbol no_expr_class::type_check(TypeEnvironment *env)
+Symbol no_expr_class::infer_type(TypeEnvironment *env)
 {
-  set_type(No_type);
   return No_type;
 }
 
-Symbol object_class::type_check(TypeEnvironment *env)
+Symbol object_class::infer_type(TypeEnvironment *env)
 {
   Symbol object_type = env->lookup_object(name);
-
   if (object_type != NULL) {
-    set_type(object_type);
     return object_type;
   }
 
   env->semant_error(this) << "Undeclared identifier " << name << "." << endl;
 
-  set_type(Object);
   return Object;
 }
