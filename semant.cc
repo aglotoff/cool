@@ -99,12 +99,9 @@ ClassTable::ClassTable(Classes classes):
   if (errors() > 0)
     return;
 
-  InheritanceNode *root = table->probe(Object);
-  root->init_env(this);
-  root->build_feature_tables();
-
+  build_feature_tables();
   check_main();
-  check_types();
+  type_check();
 }
 
 void ClassTable::install_basic_classes()
@@ -296,6 +293,13 @@ void ClassTable::check_inheritance_cycles()
   }
 }
 
+void ClassTable::build_feature_tables()
+{
+  InheritanceNode *root = table->probe(Object);
+  root->init_env(this);
+  root->build_feature_tables();
+}
+
 void ClassTable::check_main()
 {
   InheritanceNodeP main_node = table->probe(Main);
@@ -307,10 +311,10 @@ void ClassTable::check_main()
   main_node->check_main_method();
 }
 
-void ClassTable::check_types()
+void ClassTable::type_check()
 {
   for (List<InheritanceNode> *l = list; l != NULL; l = l->tl())
-    l->hd()->check_type();
+    l->hd()->type_check();
 }
 
 InheritanceNode *ClassTable::lookup(Symbol name)
@@ -417,7 +421,7 @@ void InheritanceNode::check_main_method()
   }
 }
 
-void InheritanceNode::check_type()
+void InheritanceNode::type_check()
 {
   if (is_basic())
     return;
@@ -425,7 +429,7 @@ void InheritanceNode::check_type()
   Features features = get_class()->get_features();
 
   for (int i = features->first(); features->more(i); i = features->next(i))
-    features->nth(i)->check_type(env);
+    features->nth(i)->type_check(env);
 }
 
 TypeEnvironment::TypeEnvironment(ClassTableP t, InheritanceNodeP n):
@@ -496,6 +500,61 @@ method_class *TypeEnvironment::lookup_method(Symbol name)
 method_class *TypeEnvironment::probe_method(Symbol name)
 {
   return method_table.probe(name);
+}
+
+Symbol TypeEnvironment::check_dispatch_type(
+  tree_node *t, 
+  Symbol expr_type,
+  Symbol type_name,
+  Expressions actuals,
+  Symbol name)
+{
+  for (int i = actuals->first(); actuals->more(i); i = actuals->next(i))
+    actuals->nth(i)->type_check(this);
+
+  InheritanceNodeP node = lookup_class(type_name);
+  if (node == NULL) {
+    semant_error(t) << "Static dispatch to undefined class " << type_name
+      << "." << endl;
+    return Object;
+  }
+    
+  if (!check_conformance(expr_type, type_name)) {
+    semant_error(t) << "Expression type " << expr_type 
+      << " does not conform to declared static dispatch type " << type_name
+      << "." << endl;
+    return Object;
+  }
+
+  method_class *method = node->get_env()->lookup_method(name);
+  if (method == NULL) {
+    semant_error(t) << "Dispatch to undefined method " << name << "."
+      << endl;
+    return Object;
+  }
+
+  Formals formals = method->get_formals();
+  if (formals->len() != actuals->len()) {
+    semant_error(t) << "Method " << name
+      << " called with wrong number of arguments." << endl;
+  }
+
+  for (int i = formals->first(), j = actuals->first();
+       formals->more(i) && actuals->more(j);
+       i = formals->next(i), j = actuals->next(j)) {
+    Symbol formal_type = formals->nth(i)->get_type();
+    Symbol actual_type = actuals->nth(j)->get_type();
+
+    if (!check_conformance(actual_type, formal_type)) {
+      semant_error(t) << "In call of method " << name
+        << ", type " << actual_type << " of parameter "
+        << formals->nth(i)->get_name() << " does not conform to declared type "
+        << formal_type << "." << endl;
+    }
+  }
+
+  Symbol return_type = method->get_return_type();
+  return return_type == SELF_TYPE ? expr_type : return_type;
 }
 
 ostream& TypeEnvironment::semant_error()
@@ -624,7 +683,7 @@ void method_class::add_to_table(TypeEnvironment *env)
   env->add_method(name, this);
 }
 
-void method_class::check_type(TypeEnvironment *env)
+void method_class::type_check(TypeEnvironment *env)
 {
   env->enter_object_scope();
 
@@ -639,7 +698,7 @@ void method_class::check_type(TypeEnvironment *env)
     }
   }
 
-  Symbol expr_type = expr->check_type(env);
+  Symbol expr_type = expr->type_check(env);
 
   if (!env->check_conformance(expr_type, return_type)) {
     env->semant_error(this) << "Inferred return type " << expr_type
@@ -673,24 +732,24 @@ void attr_class::add_to_table(TypeEnvironment *env)
   env->add_object(name, type_decl);
 }
 
-void attr_class::check_type(TypeEnvironment *env)
+void attr_class::type_check(TypeEnvironment *env)
 {
-  init->check_type(env);
+  init->type_check(env);
 }
 
-Symbol branch_class::check_type(TypeEnvironment *env)
+Symbol branch_class::type_check(TypeEnvironment *env)
 {
   env->enter_object_scope();
   env->add_object(name, type_decl);
 
-  Symbol t = expr->check_type(env);
+  Symbol t = expr->type_check(env);
 
   env->exit_object_scope();
 
   return t;
 }
 
-Symbol Expression_class::check_type(TypeEnvironment *env)
+Symbol Expression_class::type_check(TypeEnvironment *env)
 {
   set_type(infer_type(env));
   return type;
@@ -698,136 +757,64 @@ Symbol Expression_class::check_type(TypeEnvironment *env)
 
 Symbol assign_class::infer_type(TypeEnvironment *env)
 {
-  Symbol t = expr->check_type(env);
-  Symbol decl_t = env->lookup_object(name);
+  Symbol expr_type = expr->type_check(env);
+  Symbol decl_type = env->lookup_object(name);
 
   if (name == self) {
     env->semant_error(this) << "Cannot assign to 'self'." << endl;
-  } else if (decl_t == NULL) {
-    env->semant_error(this) << "Assignment to undeclared variable " << name << "." << endl;
-  } else if (!env->check_conformance(t, decl_t)) {
-    env->semant_error(this) << "Type " << t
+  } else if (decl_type == NULL) {
+    env->semant_error(this) << "Assignment to undeclared variable "
+      << name << "." << endl;
+  } else if (!env->check_conformance(expr_type, decl_type)) {
+    env->semant_error(this) << "Type " << expr_type
       << " of assigned expression does not conform to declared type "
-      << decl_t << " of identifier " << name << "." << endl;
+      << decl_type << " of identifier " << name << "." << endl;
   }
 
-  return t;
+  return expr_type;
 }
 
 Symbol static_dispatch_class::infer_type(TypeEnvironment *env)
 {
-  Symbol expr_type = expr->check_type(env);
-
-  for (int i = actual->first(); actual->more(i); i = actual->next(i))
-    actual->nth(i)->check_type(env);
-
-  if (!env->check_conformance(expr_type, type_name)) {
-    env->semant_error(this) << "Expression type " << expr_type 
-      << " does not conform to declared static dispatch type " << type_name
-      << "." << endl;
-    return Object;
-  }
-
-  InheritanceNodeP node = env->lookup_class(type_name);
-  method_class *method = node->get_env()->lookup_method(name);
-  if (method == NULL) {
-    env->semant_error(this) << "Dispatch to undefined method " << name << "."
-      << endl;
-    return Object;
-  }
-
-  Formals formals = method->get_formals();
-  if (formals->len() != actual->len()) {
-    env->semant_error(this) << "Method " << name
-      << " called with wrong number of arguments." << endl;
-  }
-
-  for (int i = formals->first(), j = actual->first();
-       formals->more(i) && actual->more(j);
-       i = formals->next(i), j = actual->next(j)) {
-    Symbol formal_type = formals->nth(i)->get_type();
-    Symbol actual_type = actual->nth(j)->get_type();
-
-    if (!env->check_conformance(actual_type, formal_type)) {
-      env->semant_error(this) << "In call of method " << name
-        << ", type " << actual_type << " of parameter "
-        << formals->nth(i)->get_name() << " does not conform to declared type "
-        << formal_type << "." << endl;
-    }
-  }
-
-  Symbol return_type = method->get_return_type();
-  return return_type == SELF_TYPE ? expr_type : return_type;
+  Symbol expr_type = expr->type_check(env);
+  return env->check_dispatch_type(this, expr_type, type_name, actual, name);
 }
 
 Symbol dispatch_class::infer_type(TypeEnvironment *env)
 {
-  Symbol expr_type = expr->check_type(env);
-
-  for (int i = actual->first(); actual->more(i); i = actual->next(i))
-    actual->nth(i)->check_type(env);
-
-  InheritanceNodeP node = env->lookup_class(expr_type);
-  method_class *method = node->get_env()->lookup_method(name);
-  if (method == NULL) {
-    env->semant_error(this) << "Dispatch to undefined method " << name << "."
-      << endl;
-    return Object;
-  }
-
-  Formals formals = method->get_formals();
-  if (formals->len() != actual->len()) {
-    env->semant_error(this) << "Method " << name
-      << " called with wrong number of arguments." << endl;
-  }
-
-  for (int i = formals->first(), j = actual->first();
-       formals->more(i) && actual->more(j);
-       i = formals->next(i), j = actual->next(j)) {
-    Symbol formal_type = formals->nth(i)->get_type();
-    Symbol actual_type = actual->nth(j)->get_type();
-
-    if (!env->check_conformance(actual_type, formal_type)) {
-      env->semant_error(this) << "In call of method " << name
-        << ", type " << actual_type << " of parameter "
-        << formals->nth(i)->get_name() << " does not conform to declared type "
-        << formal_type << "." << endl;
-    }
-  }
-
-  Symbol return_type = method->get_return_type();
-  return return_type == SELF_TYPE ? expr_type : return_type;
+  Symbol expr_type = expr->type_check(env);
+  return env->check_dispatch_type(this, expr_type, expr_type, actual, name);
 }
 
 Symbol cond_class::infer_type(TypeEnvironment *env)
 {
-  Symbol pred_type = pred->check_type(env);
+  Symbol pred_type = pred->type_check(env);
   if (pred_type != Bool) {
     env->semant_error(this) << "Predicate of 'if' does not have type Bool."
       << endl;
   }
 
-  Symbol then_type = then_exp->check_type(env);
-  Symbol else_type = else_exp->check_type(env);
+  Symbol then_type = then_exp->type_check(env);
+  Symbol else_type = else_exp->type_check(env);
 
   return env->get_lub(then_type, else_type);
 }
 
 Symbol loop_class::infer_type(TypeEnvironment *env)
 {
-  if (pred->check_type(env) != Bool) {
+  if (pred->type_check(env) != Bool) {
     env->semant_error(this) << "Loop condition does not have type Bool."
       << endl;
   }
 
-  body->check_type(env);
+  body->type_check(env);
 
   return Object;
 }
 
 Symbol typcase_class::infer_type(TypeEnvironment *env)
 {
-  expr->check_type(env);
+  expr->type_check(env);
 
   Symbol lub_type = No_type;
 
@@ -842,7 +829,7 @@ Symbol typcase_class::infer_type(TypeEnvironment *env)
       }
     }
 
-    Symbol t = c->check_type(env);
+    Symbol t = c->type_check(env);
     lub_type = (lub_type == No_type) ? t : env->get_lub(lub_type, t);
   }
 
@@ -854,7 +841,7 @@ Symbol block_class::infer_type(TypeEnvironment *env)
   Symbol last_type = Object;
 
   for (int i = body->first(); body->more(i); i = body->next(i))
-    last_type = body->nth(i)->check_type(env);
+    last_type = body->nth(i)->type_check(env);
 
   return last_type;
 }
@@ -863,7 +850,7 @@ Symbol let_class::infer_type(TypeEnvironment *env)
 {
   env->enter_object_scope();
 
-  Symbol init_type = init->check_type(env);
+  Symbol init_type = init->type_check(env);
 
   if (identifier == self) {
     env->semant_error(this) << "'self' cannot be bound in a 'let' expression."
@@ -879,7 +866,7 @@ Symbol let_class::infer_type(TypeEnvironment *env)
     env->add_object(identifier, type_decl);
   }
 
-  Symbol body_type = body->check_type(env);
+  Symbol body_type = body->type_check(env);
 
   env->exit_object_scope();
 
@@ -888,8 +875,8 @@ Symbol let_class::infer_type(TypeEnvironment *env)
 
 Symbol plus_class::infer_type(TypeEnvironment *env)
 {
-  Symbol t1 = e1->check_type(env);
-  Symbol t2 = e2->check_type(env);
+  Symbol t1 = e1->type_check(env);
+  Symbol t2 = e2->type_check(env);
 
   if ((t1 != Int) || (t2 != Int)) {
     env->semant_error(this) << "non-Int arguments: " << t1 << " + " << t2
@@ -901,8 +888,8 @@ Symbol plus_class::infer_type(TypeEnvironment *env)
 
 Symbol sub_class::infer_type(TypeEnvironment *env)
 {
-  Symbol t1 = e1->check_type(env);
-  Symbol t2 = e2->check_type(env);
+  Symbol t1 = e1->type_check(env);
+  Symbol t2 = e2->type_check(env);
 
   if ((t1 != Int) || (t2 != Int)) {
     env->semant_error(this) << "non-Int arguments: " << t1 << " - " << t2
@@ -914,8 +901,8 @@ Symbol sub_class::infer_type(TypeEnvironment *env)
 
 Symbol mul_class::infer_type(TypeEnvironment *env)
 {
-  Symbol t1 = e1->check_type(env);
-  Symbol t2 = e2->check_type(env);
+  Symbol t1 = e1->type_check(env);
+  Symbol t2 = e2->type_check(env);
 
   if ((t1 != Int) || (t2 != Int)) {
     env->semant_error(this) << "non-Int arguments: " << t1 << " * " << t2
@@ -927,8 +914,8 @@ Symbol mul_class::infer_type(TypeEnvironment *env)
 
 Symbol divide_class::infer_type(TypeEnvironment *env)
 {
-  Symbol t1 = e1->check_type(env);
-  Symbol t2 = e2->check_type(env);
+  Symbol t1 = e1->type_check(env);
+  Symbol t2 = e2->type_check(env);
 
   if ((t1 != Int) || (t2 != Int)) {
     env->semant_error(this) << "non-Int arguments: " << t1 << " / " << t2
@@ -940,7 +927,7 @@ Symbol divide_class::infer_type(TypeEnvironment *env)
 
 Symbol neg_class::infer_type(TypeEnvironment *env)
 {
-  Symbol t1 = e1->check_type(env);
+  Symbol t1 = e1->type_check(env);
 
   if (t1 != Int) {
     env->semant_error(this) << "Argument of '~' has type " << t1
@@ -952,8 +939,8 @@ Symbol neg_class::infer_type(TypeEnvironment *env)
 
 Symbol lt_class::infer_type(TypeEnvironment *env)
 {
-  Symbol t1 = e1->check_type(env);
-  Symbol t2 = e2->check_type(env);
+  Symbol t1 = e1->type_check(env);
+  Symbol t2 = e2->type_check(env);
 
   if ((t1 != Int) || (t2 != Int)) {
     env->semant_error(this) << "non-Int arguments: " << t1 << " < " << t2
@@ -965,8 +952,8 @@ Symbol lt_class::infer_type(TypeEnvironment *env)
 
 Symbol eq_class::infer_type(TypeEnvironment *env)
 {
-  Symbol t1 = e1->check_type(env);
-  Symbol t2 = e2->check_type(env);
+  Symbol t1 = e1->type_check(env);
+  Symbol t2 = e2->type_check(env);
 
   InheritanceNodeP n1 = env->lookup_class(t1);
   InheritanceNodeP n2 = env->lookup_class(t2);
@@ -980,8 +967,8 @@ Symbol eq_class::infer_type(TypeEnvironment *env)
 
 Symbol leq_class::infer_type(TypeEnvironment *env)
 {
-  Symbol t1 = e1->check_type(env);
-  Symbol t2 = e2->check_type(env);
+  Symbol t1 = e1->type_check(env);
+  Symbol t2 = e2->type_check(env);
 
   if ((t1 != Int) || (t2 != Int)) {
     env->semant_error(this) << "non-Int arguments: " << t1 << " <= " << t2
@@ -993,7 +980,7 @@ Symbol leq_class::infer_type(TypeEnvironment *env)
 
 Symbol comp_class::infer_type(TypeEnvironment *env)
 {
-  Symbol t1 = e1->check_type(env);
+  Symbol t1 = e1->type_check(env);
 
   if (t1 != Bool) {
     env->semant_error(this) << "Argument of 'not' has type " << t1
@@ -1020,9 +1007,8 @@ Symbol string_const_class::infer_type(TypeEnvironment *env)
 
 Symbol new__class::infer_type(TypeEnvironment *env)
 {
-  if (env->lookup_class(type_name) != NULL) {
+  if (env->lookup_class(type_name) != NULL)
     return type_name;
-  }
 
   env->semant_error(this) << "'new' used with undefined class " << type_name
     << "." << endl;
@@ -1032,7 +1018,7 @@ Symbol new__class::infer_type(TypeEnvironment *env)
 
 Symbol isvoid_class::infer_type(TypeEnvironment *env)
 {
-  e1->check_type(env);
+  e1->type_check(env);
   return Bool;
 }
 
@@ -1043,9 +1029,9 @@ Symbol no_expr_class::infer_type(TypeEnvironment *env)
 
 Symbol object_class::infer_type(TypeEnvironment *env)
 {
-  Symbol object_type = env->lookup_object(name);
-  if (object_type != NULL) {
-    return object_type;
+  Symbol decl_type = env->lookup_object(name);
+  if (decl_type != NULL) {
+    return decl_type;
   }
 
   env->semant_error(this) << "Undeclared identifier " << name << "." << endl;

@@ -5,6 +5,7 @@
 #define COOL_TREE_HANDCODE_H
 
 #include <iostream>
+
 #include "tree.h"
 #include "cool.h"
 #include "stringtab.h"
@@ -14,10 +15,10 @@ extern int yylineno;
 
 class TypeEnvironment;
 
-inline Boolean copy_Boolean(Boolean b) {return b; }
+inline Boolean copy_Boolean(Boolean b) { return b; }
 inline void assert_Boolean(Boolean) {}
 inline void dump_Boolean(ostream& stream, int padding, Boolean b)
-  { stream << pad(padding) << (int) b << "\n"; }
+{ stream << pad(padding) << (int) b << "\n"; }
 
 void dump_Symbol(ostream& stream, int padding, Symbol b);
 void assert_Symbol(Symbol b);
@@ -51,11 +52,10 @@ typedef Cases_class *Cases;
 virtual void semant() = 0;                          \
 virtual void dump_with_types(ostream&, int) = 0; 
 
-
-
 #define program_EXTRAS                              \
 void semant();                                      \
 void dump_with_types(ostream&, int);            
+
 
 #define Class__EXTRAS                               \
 virtual Symbol get_filename() = 0;                  \
@@ -63,7 +63,6 @@ virtual Symbol get_name() = 0;                      \
 virtual Symbol get_parent() = 0;                    \
 virtual Features get_features() = 0;                \
 virtual void dump_with_types(ostream&,int) = 0;
-
 
 #define class__EXTRAS                               \
 Symbol get_filename() { return filename; }          \
@@ -76,24 +75,22 @@ void dump_with_types(ostream&,int);
 #define Feature_EXTRAS                              \
 virtual void dump_with_types(ostream&,int) = 0;     \
 virtual void add_to_table(TypeEnvironment *) = 0;   \
-virtual void check_type(TypeEnvironment *) = 0;
-
+virtual void type_check(TypeEnvironment *) = 0;
 
 #define Feature_SHARED_EXTRAS                       \
 void dump_with_types(ostream&,int);                 \
 void add_to_table(TypeEnvironment *);               \
-void check_type(TypeEnvironment *);
-
+void type_check(TypeEnvironment *);
 
 #define method_EXTRAS                               \
   Formals get_formals() { return formals; }         \
-  Symbol get_return_type() { return return_type; } 
+  Symbol get_return_type() { return return_type; }
+
 
 #define Formal_EXTRAS                               \
 virtual Symbol get_type() = 0;                      \
 virtual Symbol get_name() = 0;                      \
 virtual void dump_with_types(ostream&,int) = 0;
-
 
 #define formal_EXTRAS                               \
 Symbol get_name() { return name; }                  \
@@ -102,13 +99,12 @@ void dump_with_types(ostream&,int);
 
 
 #define Case_EXTRAS                                 \
-virtual Symbol check_type(TypeEnvironment *) = 0;   \
+virtual Symbol type_check(TypeEnvironment *) = 0;   \
 virtual Symbol get_type_decl() = 0;                 \
 virtual void dump_with_types(ostream& ,int) = 0;
 
-
 #define branch_EXTRAS                               \
-Symbol check_type(TypeEnvironment *);               \
+Symbol type_check(TypeEnvironment *);               \
 Symbol get_type_decl() { return type_decl; }        \
 void dump_with_types(ostream& ,int);
 
@@ -119,7 +115,7 @@ Symbol get_type() { return type; }                        \
 Expression set_type(Symbol s) { type = s; return this; }  \
 virtual Symbol infer_type(TypeEnvironment *) = 0;         \
 virtual void dump_with_types(ostream&,int) = 0;           \
-Symbol check_type(TypeEnvironment *);                     \
+Symbol type_check(TypeEnvironment *);                     \
 void dump_type(ostream&, int);                            \
 Expression_class() { type = (Symbol) NULL; }
 

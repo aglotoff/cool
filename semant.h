@@ -37,8 +37,9 @@ private:
   void check_inheritance();
   void build_inheritance_tree();
   void check_inheritance_cycles();
+  void build_feature_tables();
   void check_main();
-  void check_types();
+  void type_check();
 
 public:
   ClassTable(Classes);
@@ -73,7 +74,7 @@ public:
   TypeEnvironment *get_env() { return env; }
   void build_feature_tables();
   void check_main_method();
-  void check_type();
+  void type_check();
 };
 
 class TypeEnvironment {
@@ -99,6 +100,7 @@ public:
   method_class *probe_method(Symbol);
   bool check_conformance(Symbol, Symbol);
   Symbol get_lub(Symbol, Symbol);
+  Symbol check_dispatch_type(tree_node *, Symbol, Symbol, Expressions, Symbol);
   ostream& semant_error();
   ostream& semant_error(tree_node *);
 };
