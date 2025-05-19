@@ -1,5 +1,3 @@
-
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -95,13 +93,6 @@ ClassTable::ClassTable(Classes classes):
   check_inheritance();
   build_inheritance_tree();
   check_inheritance_cycles();
-
-  if (errors() > 0)
-    return;
-
-  build_feature_tables();
-  check_main();
-  type_check();
 }
 
 void ClassTable::install_basic_classes()
@@ -313,6 +304,9 @@ void ClassTable::check_main()
 
 void ClassTable::type_check()
 {
+  build_feature_tables();
+  check_main();
+
   for (List<InheritanceNode> *l = list; l != NULL; l = l->tl())
     l->hd()->type_check();
 }
@@ -594,27 +588,24 @@ Symbol TypeEnvironment::get_lub(Symbol t1, Symbol t2)
   return n1->get_class()->get_name();
 }
 
-/*   This is the entry point to the semantic checker.
-
-     Your checker should do the following two things:
-
-     1) Check that the program is semantically correct
-     2) Decorate the abstract syntax tree with type information
-        by setting the `type' field in each Expression node.
-        (see `tree.h')
-
-     You are free to first do 1), make sure you catch all semantic
-     errors. Part 2) can be done in a second stage, when you want
-     to build mycoolc.
- */
+//
+// This is the entry point to the semantic checker. 
+//
+// It does the following two things:
+//
+// 1) Check that the program is semantically correct
+// 2) Decorate the abstract syntax tree with type information
+//    by setting the `type' field in each Expression node.
+//    (see `tree.h')
+//
 void program_class::semant()
 {
   initialize_constants();
 
-  /* ClassTable constructor may do some semantic analysis */
   ClassTable *classtable = new ClassTable(classes);
 
-  /* some semantic analysis code may go here */
+  if (!classtable->errors())
+    classtable->type_check();
 
   if (classtable->errors()) {
     cerr << "Compilation halted due to static semantic errors." << endl;
@@ -714,22 +705,15 @@ void attr_class::add_to_table(TypeEnvironment *env)
   if (name == self) {
     env->semant_error(this) << "'self' cannot be the name of an attribute."
       << endl;
-    return;
-  }
-
-  if (env->probe_object(name) != NULL) {
+  } else if (env->probe_object(name) != NULL) {
     env->semant_error(this) << "Attribute " << name
       << " is multiply defined in class." << endl;
-    return;
-  }
-  
-  if (env->lookup_object(name) != NULL) {
+  } else if (env->lookup_object(name) != NULL) {
     env->semant_error(this) << "Attribute " << name
       << " is an attribute of an inherited class." << endl;
-    return;
+  } else {
+    env->add_object(name, type_decl);
   }
-  
-  env->add_object(name, type_decl);
 }
 
 void attr_class::type_check(TypeEnvironment *env)
@@ -816,24 +800,26 @@ Symbol typcase_class::infer_type(TypeEnvironment *env)
 {
   expr->type_check(env);
 
-  Symbol lub_type = No_type;
-
+  Symbol case_type = No_type;
   for (int i = cases->first(); cases->more(i); i = cases->next(i)) {
-    Case c = cases->nth(i);
+    Case branch = cases->nth(i);
+    Symbol branch_type_decl = branch->get_type_decl();
 
     for (int j = cases->first(); j != i; j = cases->next(j)) {
-      if (c->get_type_decl() == cases->nth(j)->get_type_decl()) {
-        env->semant_error(this) << "Duplicate branch " << c->get_type_decl()
+      if (cases->nth(j)->get_type_decl() == branch_type_decl) {
+        env->semant_error(this) << "Duplicate branch " << branch_type_decl
           << " in case statement." << endl;
         break;
       }
     }
 
-    Symbol t = c->type_check(env);
-    lub_type = (lub_type == No_type) ? t : env->get_lub(lub_type, t);
+    Symbol branch_type = branch->type_check(env);
+    case_type = (case_type == No_type)
+      ? branch_type
+      : env->get_lub(case_type, branch_type);
   }
 
-  return lub_type;
+  return case_type;
 }
 
 Symbol block_class::infer_type(TypeEnvironment *env)
@@ -958,9 +944,8 @@ Symbol eq_class::infer_type(TypeEnvironment *env)
   InheritanceNodeP n1 = env->lookup_class(t1);
   InheritanceNodeP n2 = env->lookup_class(t2);
 
-  if (n1 != n2 && (!n1->is_inheritable() || !n2->is_inheritable())) {
+  if (n1 != n2 && (!n1->is_inheritable() || !n2->is_inheritable()))
     env->semant_error(this) << "Illegal comparison with a basic type" << endl;
-  }
 
   return Bool;
 }

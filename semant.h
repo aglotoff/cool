@@ -39,12 +39,12 @@ private:
   void check_inheritance_cycles();
   void build_feature_tables();
   void check_main();
-  void type_check();
 
 public:
   ClassTable(Classes);
   int errors() { return semant_errors; }
   InheritanceNode *lookup(Symbol);
+  void type_check();
   ostream& semant_error();
   ostream& semant_error(Class_ c);
   ostream& semant_error(Symbol filename, tree_node *t);
