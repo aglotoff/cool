@@ -12,13 +12,8 @@
 #define FALSE 0
 
 class ClassTable;
-typedef ClassTable *ClassTableP;
-
 class InheritanceNode;
-typedef InheritanceNode *InheritanceNodeP;
-
 class TypeEnvironment;
-typedef TypeEnvironment *TypeEnvironmentP;
 
 // This is a structure that may be used to contain the semantic
 // information such as the inheritance graph.
@@ -70,7 +65,7 @@ public:
   void set_parent(InheritanceNode *);
   void add_child(InheritanceNode *);
   void mark_reachable();
-  void init_env(ClassTableP);
+  void init_env(ClassTable *);
   TypeEnvironment *get_env() { return env; }
   void build_feature_tables();
   void check_main_method();
@@ -79,30 +74,35 @@ public:
 
 class TypeEnvironment {
 private:
-  ClassTableP class_table;
-  InheritanceNodeP node;
+  ClassTable *class_table;
+  InheritanceNode *node;
   SymbolTable<Symbol, Entry> object_table;
   SymbolTable<Symbol, method_class> method_table;
 
 public:
-  TypeEnvironment(ClassTableP, InheritanceNodeP);
-  TypeEnvironment *copy_TypeEnvironment(InheritanceNodeP);
+  TypeEnvironment(ClassTable *, InheritanceNode *);
+  TypeEnvironment *copy_TypeEnvironment(InheritanceNode *);
   InheritanceNode *lookup_class(Symbol);
-  void enter_object_scope();
-  void exit_object_scope();
-  void add_object(Symbol, Symbol);
-  Symbol lookup_object(Symbol);
-  Symbol probe_object(Symbol);
-  void enter_method_scope();
-  void exit_method_scope();
-  void add_method(Symbol, method_class *);
-  method_class *lookup_method(Symbol);
-  method_class *probe_method(Symbol);
-  bool check_conformance(Symbol, Symbol);
+
+  bool type_conforms(Symbol, Symbol);
   Symbol get_lub(Symbol, Symbol);
-  Symbol check_dispatch_type(tree_node *, Symbol, Symbol, Expressions, Symbol);
+  Symbol type_check_dispatch(Expression, Symbol, Symbol, Expressions);
+
   ostream& semant_error();
   ostream& semant_error(tree_node *);
+
+  void enter_object_scope() { object_table.enterscope(); }
+  void exit_object_scope() { object_table.exitscope(); }
+  void add_object(Symbol name, Symbol type) { object_table.addid(name, type); }
+  Symbol lookup_object(Symbol name) { return object_table.lookup(name); }
+  Symbol probe_object(Symbol name) { return object_table.probe(name); }
+
+  void enter_method_scope() { method_table.enterscope(); }
+  void exit_method_scope() { method_table.exitscope(); }
+  void add_method(Symbol name, method_class *method)
+  { method_table.addid(name, method); }
+  method_class *lookup_method(Symbol name) { return method_table.lookup(name); }
+  method_class *probe_method(Symbol name) { return method_table.probe(name); }
 };
 
 #endif

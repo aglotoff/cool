@@ -293,7 +293,7 @@ void ClassTable::build_feature_tables()
 
 void ClassTable::check_main()
 {
-  InheritanceNodeP main_node = table->probe(Main);
+  InheritanceNode *main_node = table->probe(Main);
   if (main_node == NULL) {
     semant_error() << "Class Main is not defined." << endl;
     return;
@@ -374,7 +374,7 @@ void InheritanceNode::mark_reachable()
     l->hd()->mark_reachable();
 }
 
-void InheritanceNode::init_env(ClassTableP class_table)
+void InheritanceNode::init_env(ClassTable *class_table)
 {
   env = new TypeEnvironment(class_table, this);
 }
@@ -426,11 +426,11 @@ void InheritanceNode::type_check()
     features->nth(i)->type_check(env);
 }
 
-TypeEnvironment::TypeEnvironment(ClassTableP t, InheritanceNodeP n):
+TypeEnvironment::TypeEnvironment(ClassTable *t, InheritanceNode *n):
   class_table(t),
   node(n) {}
 
-TypeEnvironment *TypeEnvironment::copy_TypeEnvironment(InheritanceNodeP node)
+TypeEnvironment *TypeEnvironment::copy_TypeEnvironment(InheritanceNode *node)
 {
   TypeEnvironment *env = new TypeEnvironment(class_table, node);
   env->object_table = object_table;
@@ -440,96 +440,56 @@ TypeEnvironment *TypeEnvironment::copy_TypeEnvironment(InheritanceNodeP node)
 
 InheritanceNode *TypeEnvironment::lookup_class(Symbol name)
 {
-  if (name == SELF_TYPE)
-    return node;
-
-  return class_table->lookup(name);
+  return (name == SELF_TYPE) ? node : class_table->lookup(name);
 }
 
-void TypeEnvironment::enter_object_scope()
-{
-  object_table.enterscope();
-}
-
-void TypeEnvironment::exit_object_scope()
-{
-  object_table.exitscope();
-}
-
-void TypeEnvironment::add_object(Symbol name, Symbol type)
-{
-  object_table.addid(name, type);
-}
-
-Symbol TypeEnvironment::lookup_object(Symbol name)
-{
-  return object_table.lookup(name);
-}
-
-Symbol TypeEnvironment::probe_object(Symbol name)
-{
-  return object_table.probe(name);
-}
-
-void TypeEnvironment::enter_method_scope()
-{
-  method_table.enterscope();
-}
-
-void TypeEnvironment::exit_method_scope()
-{
-  method_table.exitscope();
-}
-
-void TypeEnvironment::add_method(Symbol name, method_class *method)
-{
-  method_table.addid(name, method);
-}
-
-method_class *TypeEnvironment::lookup_method(Symbol name)
-{
-  return method_table.lookup(name);
-}
-
-method_class *TypeEnvironment::probe_method(Symbol name)
-{
-  return method_table.probe(name);
-}
-
-Symbol TypeEnvironment::check_dispatch_type(
-  tree_node *t, 
-  Symbol expr_type,
+// The argument types of a dispatch must conform to the declared argument
+// types. The result type is either the declared return type of the method or
+// the inferred type of 'expr' if the declared return type is SELF_TYPE. In
+// case of a static dispatch, the inferred type of the expression must conform
+// to the given class.
+//
+Symbol TypeEnvironment::type_check_dispatch(
+  Expression expr,
   Symbol type_name,
-  Expressions actuals,
-  Symbol name)
+  Symbol method_name,
+  Expressions actuals)
 {
+  Symbol expr_type = expr->type_check(this);
+
   for (int i = actuals->first(); actuals->more(i); i = actuals->next(i))
     actuals->nth(i)->type_check(this);
 
-  InheritanceNodeP node = lookup_class(type_name);
-  if (node == NULL) {
-    semant_error(t) << "Static dispatch to undefined class " << type_name
-      << "." << endl;
-    return Object;
-  }
-    
-  if (!check_conformance(expr_type, type_name)) {
-    semant_error(t) << "Expression type " << expr_type 
-      << " does not conform to declared static dispatch type " << type_name
-      << "." << endl;
-    return Object;
+  InheritanceNode *target_node;
+  if (type_name == NULL) {
+    target_node = lookup_class(expr_type);
+  } else {
+    target_node = lookup_class(type_name);
+
+    if (target_node == NULL) {
+      semant_error(expr) << "Static dispatch to undefined class " << type_name
+        << "." << endl;
+      return Object;
+    }
+
+    if (!type_conforms(expr_type, type_name)) {
+      semant_error(expr) << "Expression type " << expr_type 
+        << " does not conform to declared static dispatch type " << type_name
+        << "." << endl;
+      return Object;
+    }
   }
 
-  method_class *method = node->get_env()->lookup_method(name);
+  method_class *method = target_node->get_env()->lookup_method(method_name);
   if (method == NULL) {
-    semant_error(t) << "Dispatch to undefined method " << name << "."
+    semant_error(expr) << "Dispatch to undefined method " << method_name << "."
       << endl;
     return Object;
   }
 
   Formals formals = method->get_formals();
   if (formals->len() != actuals->len()) {
-    semant_error(t) << "Method " << name
+    semant_error(expr) << "Method " << method_name
       << " called with wrong number of arguments." << endl;
   }
 
@@ -539,8 +499,8 @@ Symbol TypeEnvironment::check_dispatch_type(
     Symbol formal_type = formals->nth(i)->get_type();
     Symbol actual_type = actuals->nth(j)->get_type();
 
-    if (!check_conformance(actual_type, formal_type)) {
-      semant_error(t) << "In call of method " << name
+    if (!type_conforms(actual_type, formal_type)) {
+      semant_error(expr) << "In call of method " << method_name
         << ", type " << actual_type << " of parameter "
         << formals->nth(i)->get_name() << " does not conform to declared type "
         << formal_type << "." << endl;
@@ -561,13 +521,13 @@ ostream& TypeEnvironment::semant_error(tree_node *t)
   return class_table->semant_error(node->get_class()->get_filename(), t);
 }
 
-bool TypeEnvironment::check_conformance(Symbol t1, Symbol t2)
+bool TypeEnvironment::type_conforms(Symbol t1, Symbol t2)
 {
   if (t2 == SELF_TYPE)
     return t1 == SELF_TYPE;
 
-  InheritanceNodeP n1 = lookup_class(t1);
-  InheritanceNodeP n2 = lookup_class(t2);
+  InheritanceNode *n1 = lookup_class(t1);
+  InheritanceNode *n2 = lookup_class(t2);
 
   while (n1 != NULL) {
     if (n1 == n2)
@@ -580,9 +540,9 @@ bool TypeEnvironment::check_conformance(Symbol t1, Symbol t2)
 
 Symbol TypeEnvironment::get_lub(Symbol t1, Symbol t2)
 {
-  InheritanceNodeP n1 = lookup_class(t1);
+  InheritanceNode *n1 = lookup_class(t1);
 
-  while (!check_conformance(t2, n1->get_class()->get_name()))
+  while (!type_conforms(t2, n1->get_class()->get_name()))
     n1 = n1->get_parent();
 
   return n1->get_class()->get_name();
@@ -622,9 +582,10 @@ void method_class::add_to_table(TypeEnvironment *env)
   }
 
   for (int i = formals->first(); formals->more(i); i = formals->next(i)) {
-    Symbol formal_name = formals->nth(i)->get_name();
+    Formal formal = formals->nth(i);
+    Symbol formal_name = formal->get_name();
 
-    if (formals->nth(i)->get_type() == SELF_TYPE) {
+    if (formal->get_type() == SELF_TYPE) {
       env->semant_error(this) << "Formal parameter " << formal_name 
         << " cannot have type SELF_TYPE." << endl;
     }
@@ -691,7 +652,7 @@ void method_class::type_check(TypeEnvironment *env)
 
   Symbol expr_type = expr->type_check(env);
 
-  if (!env->check_conformance(expr_type, return_type)) {
+  if (!env->type_conforms(expr_type, return_type)) {
     env->semant_error(this) << "Inferred return type " << expr_type
       << " of method " << name << " does not conform to declared return type "
       << return_type << "." << endl;
@@ -726,11 +687,11 @@ Symbol branch_class::type_check(TypeEnvironment *env)
   env->enter_object_scope();
   env->add_object(name, type_decl);
 
-  Symbol t = expr->type_check(env);
+  Symbol expr_type = expr->type_check(env);
 
   env->exit_object_scope();
 
-  return t;
+  return expr_type;
 }
 
 Symbol Expression_class::type_check(TypeEnvironment *env)
@@ -739,17 +700,26 @@ Symbol Expression_class::type_check(TypeEnvironment *env)
   return type;
 }
 
+// The type of the assigned expression must conform to the declared type of the
+// identifier in the environment
 Symbol assign_class::infer_type(TypeEnvironment *env)
 {
   Symbol expr_type = expr->type_check(env);
-  Symbol decl_type = env->lookup_object(name);
 
   if (name == self) {
     env->semant_error(this) << "Cannot assign to 'self'." << endl;
-  } else if (decl_type == NULL) {
+    return expr_type;
+  }
+
+  Symbol decl_type = env->lookup_object(name);
+
+  if (decl_type == NULL) {
     env->semant_error(this) << "Assignment to undeclared variable "
       << name << "." << endl;
-  } else if (!env->check_conformance(expr_type, decl_type)) {
+    return expr_type;
+  }
+
+  if (!env->type_conforms(expr_type, decl_type)) {
     env->semant_error(this) << "Type " << expr_type
       << " of assigned expression does not conform to declared type "
       << decl_type << " of identifier " << name << "." << endl;
@@ -760,14 +730,12 @@ Symbol assign_class::infer_type(TypeEnvironment *env)
 
 Symbol static_dispatch_class::infer_type(TypeEnvironment *env)
 {
-  Symbol expr_type = expr->type_check(env);
-  return env->check_dispatch_type(this, expr_type, type_name, actual, name);
+  return env->type_check_dispatch(expr, type_name, name, actual);
 }
 
 Symbol dispatch_class::infer_type(TypeEnvironment *env)
 {
-  Symbol expr_type = expr->type_check(env);
-  return env->check_dispatch_type(this, expr_type, expr_type, actual, name);
+  return env->type_check_dispatch(expr, NULL, name, actual);
 }
 
 Symbol cond_class::infer_type(TypeEnvironment *env)
@@ -780,7 +748,6 @@ Symbol cond_class::infer_type(TypeEnvironment *env)
 
   Symbol then_type = then_exp->type_check(env);
   Symbol else_type = else_exp->type_check(env);
-
   return env->get_lub(then_type, else_type);
 }
 
@@ -792,7 +759,6 @@ Symbol loop_class::infer_type(TypeEnvironment *env)
   }
 
   body->type_check(env);
-
   return Object;
 }
 
@@ -834,15 +800,15 @@ Symbol block_class::infer_type(TypeEnvironment *env)
 
 Symbol let_class::infer_type(TypeEnvironment *env)
 {
-  env->enter_object_scope();
-
   Symbol init_type = init->type_check(env);
+
+  env->enter_object_scope();
 
   if (identifier == self) {
     env->semant_error(this) << "'self' cannot be bound in a 'let' expression."
       << endl;
   } else {
-    if (init_type != No_type && !env->check_conformance(init_type, type_decl)) {
+    if (init_type != No_type && !env->type_conforms(init_type, type_decl)) {
       env->semant_error(this) << "Inferred type " << init_type
         << " of initialization of " << identifier
         << " does not conform to identifier's declared type " << type_decl
@@ -941,8 +907,8 @@ Symbol eq_class::infer_type(TypeEnvironment *env)
   Symbol t1 = e1->type_check(env);
   Symbol t2 = e2->type_check(env);
 
-  InheritanceNodeP n1 = env->lookup_class(t1);
-  InheritanceNodeP n2 = env->lookup_class(t2);
+  InheritanceNode *n1 = env->lookup_class(t1);
+  InheritanceNode *n2 = env->lookup_class(t2);
 
   if (n1 != n2 && (!n1->is_inheritable() || !n2->is_inheritable()))
     env->semant_error(this) << "Illegal comparison with a basic type" << endl;
@@ -997,7 +963,6 @@ Symbol new__class::infer_type(TypeEnvironment *env)
 
   env->semant_error(this) << "'new' used with undefined class " << type_name
     << "." << endl;
-
   return Object;
 }
 
@@ -1012,6 +977,7 @@ Symbol no_expr_class::infer_type(TypeEnvironment *env)
   return No_type;
 }
 
+// Each identifier has the type assigned to it by the environment
 Symbol object_class::infer_type(TypeEnvironment *env)
 {
   Symbol decl_type = env->lookup_object(name);
@@ -1020,6 +986,5 @@ Symbol object_class::infer_type(TypeEnvironment *env)
   }
 
   env->semant_error(this) << "Undeclared identifier " << name << "." << endl;
-
   return Object;
 }
