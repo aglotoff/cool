@@ -80,7 +80,7 @@ static void initialize_constants(void)
 
 ClassTable::ClassTable(Classes classes):
     list(NULL),
-    table(new SymbolTable<Symbol, InheritanceNode>()),
+    table(new SymbolTable<Symbol, ClassEntry>()),
     semant_errors(0),
     error_stream(cerr)
 {
@@ -193,48 +193,47 @@ void ClassTable::install_basic_classes()
           no_expr()))),
       filename);
 
-  install_class(new InheritanceNode(Object_class, true, true));
-  install_class(new InheritanceNode(IO_class, true, true));
-  install_class(new InheritanceNode(Int_class, true, false));
-  install_class(new InheritanceNode(Bool_class, true, false));
-  install_class(new InheritanceNode(Str_class, true, false));
+  install_entry(new ClassEntry(Object_class, true, true));
+  install_entry(new ClassEntry(IO_class, true, true));
+  install_entry(new ClassEntry(Int_class, true, false));
+  install_entry(new ClassEntry(Bool_class, true, false));
+  install_entry(new ClassEntry(Str_class, true, false));
 }
 
 void ClassTable::install_classes(Classes classes)
 {
   for (int i = classes->first(); classes->more(i); i = classes->next(i))
-    install_class(new InheritanceNode(classes->nth(i), false, true));
+    install_entry(new ClassEntry(classes->nth(i), false, true));
 }
 
-void ClassTable::install_class(InheritanceNode *node)
+void ClassTable::install_entry(ClassEntry *new_entry)
 {
-  Class_ c = node->get_class();
+  Class_ c = new_entry->get_class();
   Symbol name = c->get_name();
 
-  InheritanceNode *prev_node = table->probe(name);
+  ClassEntry *old_entry = table->probe(name);
 
-  if (prev_node != NULL) {
-    if (prev_node->is_basic())
+  if (old_entry != NULL) {
+    if (old_entry->is_basic()) {
       semant_error(c) << "Redefinition of basic class " << name << "." << endl;
-    else
+    } else {
       semant_error(c) << "Class " << name << " was previously defined." << endl;
+    }
     return;
   }
-  
-  if (c != NULL)
-    list = new List<InheritanceNode>(node, list);
 
-  table->addid(name, node);
+  list = new List<ClassEntry>(new_entry, list);
+  table->addid(name, new_entry);
 }
 
 void ClassTable::install_self_type()
 {
-  table->addid(SELF_TYPE, new InheritanceNode(NULL, true, false));
+  table->addid(SELF_TYPE, new ClassEntry(NULL, true, false));
 }
 
 void ClassTable::check_inheritance()
 {
-  for (List<InheritanceNode> *l = list; l != NULL; l = l->tl()) {
+  for (List<ClassEntry> *l = list; l != NULL; l = l->tl()) {
     Class_ c = l->hd()->get_class();
     Symbol name = c->get_name();
     Symbol parent = c->get_parent();
@@ -242,7 +241,7 @@ void ClassTable::check_inheritance()
     if (parent == No_class)
       continue;
     
-    InheritanceNode *parent_node = table->probe(parent);
+    ClassEntry *parent_node = table->probe(parent);
     if (parent_node == NULL) {
       semant_error(c) << "Class " << name
         << " inherits from an undefined class " << parent << "." << endl;
@@ -255,11 +254,11 @@ void ClassTable::check_inheritance()
 
 void ClassTable::build_inheritance_tree()
 {
-  for (List<InheritanceNode> *l = list; l != NULL; l = l->tl()) {
+  for (List<ClassEntry> *l = list; l != NULL; l = l->tl()) {
     Class_ c = l->hd()->get_class();
     
-    InheritanceNode *node = table->probe(c->get_name());
-    InheritanceNode *parent_node = table->probe(c->get_parent());
+    ClassEntry *node = table->probe(c->get_name());
+    ClassEntry *parent_node = table->probe(c->get_parent());
 
     if (node != NULL && parent_node != NULL) {
       node->set_parent(parent_node);
@@ -270,13 +269,12 @@ void ClassTable::build_inheritance_tree()
 
 void ClassTable::check_inheritance_cycles()
 {
-  InheritanceNode *root = table->probe(Object);
+  ClassEntry *root = table->probe(Object);
   root->mark_reachable();
 
-  for (List<InheritanceNode> *l = list; l != NULL; l = l->tl()) {
-    Class_ c = l->hd()->get_class();
-    
-    InheritanceNode *node = table->probe(c->get_name());
+  for (List<ClassEntry> *l = list; l != NULL; l = l->tl()) {
+    ClassEntry *node = l->hd();
+    Class_ c = node->get_class();
  
     if (node->get_parent() && !node->is_reachable())
       semant_error(c) << "Class " << c->get_name() << ", or an ancestor of "
@@ -286,14 +284,13 @@ void ClassTable::check_inheritance_cycles()
 
 void ClassTable::build_feature_tables()
 {
-  InheritanceNode *root = table->probe(Object);
+  ClassEntry *root = table->probe(Object);
   root->init_env(this);
-  root->build_feature_tables();
 }
 
 void ClassTable::check_main()
 {
-  InheritanceNode *main_node = table->probe(Main);
+  ClassEntry *main_node = table->probe(Main);
   if (main_node == NULL) {
     semant_error() << "Class Main is not defined." << endl;
     return;
@@ -305,13 +302,14 @@ void ClassTable::check_main()
 void ClassTable::type_check()
 {
   build_feature_tables();
-  check_main();
 
-  for (List<InheritanceNode> *l = list; l != NULL; l = l->tl())
-    l->hd()->type_check();
+  for (List<ClassEntry> *l = list; l != NULL; l = l->tl())
+    l->hd()->type_check_features();
+
+  check_main();
 }
 
-InheritanceNode *ClassTable::lookup(Symbol name)
+ClassEntry *ClassTable::lookup(Symbol name)
 {
   return table->probe(name);
 }
@@ -348,89 +346,77 @@ ostream& ClassTable::semant_error()
   return error_stream;
 } 
 
-InheritanceNode::InheritanceNode(Class_ c, bool b, bool i):
-  class_(c),
-  basic(b),
-  inheritable(i),
-  reachable(false),
-  parent(NULL),
-  children(NULL) {}
 
-void InheritanceNode::set_parent(InheritanceNode *p)
+ClassEntry::ClassEntry(Class_ n, bool b, bool i):
+  node(n), basic(b), inheritable(i) {}
+
+void ClassEntry::add_child(ClassEntry *child_entry)
 {
-  parent = p;
+  children = new List<ClassEntry>(child_entry, children);
 }
 
-void InheritanceNode::add_child(InheritanceNode *child)
-{
-  children = new List<InheritanceNode>(child, children);
-}
-
-void InheritanceNode::mark_reachable()
+void ClassEntry::mark_reachable()
 {
   reachable = true;
 
-  for (List<InheritanceNode> *l = children; l != NULL; l = l->tl())
+  for (List<ClassEntry> *l = children; l != NULL; l = l->tl())
     l->hd()->mark_reachable();
 }
 
-void InheritanceNode::init_env(ClassTable *class_table)
+void ClassEntry::init_env(ClassTable *class_table)
 {
   env = new TypeEnvironment(class_table, this);
+  build_feature_tables();
 }
 
-void InheritanceNode::build_feature_tables()
+void ClassEntry::build_feature_tables()
 {
   env->enter_object_scope();
   env->enter_method_scope();
 
   env->add_object(self, SELF_TYPE);
 
-  Features features = get_class()->get_features();
+  Features features = node->get_features();
 
   for (int i = features->first(); features->more(i); i = features->next(i))
     features->nth(i)->add_to_table(env);
 
-  for (List<InheritanceNode> *l = children; l != NULL; l = l->tl()) {
-    InheritanceNode *child = l->hd();
+  for (List<ClassEntry> *l = children; l != NULL; l = l->tl()) {
+    ClassEntry *child = l->hd();
     child->env = env->copy_TypeEnvironment(child);
     child->build_feature_tables();
   }
 }
 
-void InheritanceNode::check_main_method()
+void ClassEntry::check_main_method()
 {
-  Symbol class_name = get_class()->get_name();
+  Symbol class_name = node->get_name();
+  method_class *method = env->probe_method(main_meth);
 
-  method_class *main_method = env->probe_method(main_meth);
-  if (main_method == NULL) {
-    env->semant_error() << "No 'main' method in class " << class_name
+  if (method == NULL) {
+    env->semant_error(node) << "No 'main' method in class " << class_name
       << "." << endl;
     return;
   }
 
-  if (main_method->get_formals()->len() != 0) {
-    env->semant_error(get_class()) << "'main' method in class " << class_name
+  if (method->get_formals()->len() != 0) {
+    env->semant_error(node) << "'main' method in class " << class_name
       << " should have no arguments." << endl;
   }
 }
 
-void InheritanceNode::type_check()
+void ClassEntry::type_check_features()
 {
-  if (is_basic())
-    return;
-
-  Features features = get_class()->get_features();
-
+  Features features = node->get_features();
   for (int i = features->first(); features->more(i); i = features->next(i))
     features->nth(i)->type_check(env);
 }
 
-TypeEnvironment::TypeEnvironment(ClassTable *t, InheritanceNode *n):
-  class_table(t),
-  node(n) {}
 
-TypeEnvironment *TypeEnvironment::copy_TypeEnvironment(InheritanceNode *node)
+TypeEnvironment::TypeEnvironment(ClassTable *table, ClassEntry *entry):
+  class_table(table), class_entry(entry) {}
+
+TypeEnvironment *TypeEnvironment::copy_TypeEnvironment(ClassEntry *node)
 {
   TypeEnvironment *env = new TypeEnvironment(class_table, node);
   env->object_table = object_table;
@@ -438,9 +424,9 @@ TypeEnvironment *TypeEnvironment::copy_TypeEnvironment(InheritanceNode *node)
   return env;
 }
 
-InheritanceNode *TypeEnvironment::lookup_class(Symbol name)
+ClassEntry *TypeEnvironment::lookup_class(Symbol name)
 {
-  return (name == SELF_TYPE) ? node : class_table->lookup(name);
+  return (name == SELF_TYPE) ? class_entry : class_table->lookup(name);
 }
 
 // The argument types of a dispatch must conform to the declared argument
@@ -460,7 +446,7 @@ Symbol TypeEnvironment::type_check_dispatch(
   for (int i = actuals->first(); actuals->more(i); i = actuals->next(i))
     actuals->nth(i)->type_check(this);
 
-  InheritanceNode *target_node;
+  ClassEntry *target_node;
   if (type_name == NULL) {
     target_node = lookup_class(expr_type);
   } else {
@@ -480,7 +466,7 @@ Symbol TypeEnvironment::type_check_dispatch(
     }
   }
 
-  method_class *method = target_node->get_env()->lookup_method(method_name);
+  method_class *method = target_node->lookup_method(method_name);
   if (method == NULL) {
     semant_error(expr) << "Dispatch to undefined method " << method_name << "."
       << endl;
@@ -511,36 +497,37 @@ Symbol TypeEnvironment::type_check_dispatch(
   return return_type == SELF_TYPE ? expr_type : return_type;
 }
 
-ostream& TypeEnvironment::semant_error()
-{
-  return semant_error(node->get_class());
-}
-
 ostream& TypeEnvironment::semant_error(tree_node *t)
 {
-  return class_table->semant_error(node->get_class()->get_filename(), t);
+  return class_table->semant_error(class_entry->get_class()->get_filename(), t);
 }
 
-bool TypeEnvironment::type_conforms(Symbol t1, Symbol t2)
+// Check whether the 'lower_type' conforms to the 'upper_type' by following up
+// the inheritance chain of the former and trying to find the latter.
+//
+// There are is a special case for SELF_TYPE as an upper type which requires
+// the lower type to be also SELF_TYPE.
+//
+bool TypeEnvironment::type_conforms(Symbol lower_type, Symbol upper_type)
 {
-  if (t2 == SELF_TYPE)
-    return t1 == SELF_TYPE;
+  if (upper_type == SELF_TYPE)
+    return lower_type == SELF_TYPE;
 
-  InheritanceNode *n1 = lookup_class(t1);
-  InheritanceNode *n2 = lookup_class(t2);
+  ClassEntry *lower_entry = lookup_class(lower_type);
+  ClassEntry *upper_entry = lookup_class(upper_type);
 
-  while (n1 != NULL) {
-    if (n1 == n2)
+  while (lower_entry != NULL) {
+    if (lower_entry == upper_entry)
       return true;
-    n1 = n1->get_parent();
+    lower_entry = lower_entry->get_parent();
   }
 
   return false;
 }
 
-Symbol TypeEnvironment::get_lub(Symbol t1, Symbol t2)
+Symbol TypeEnvironment::get_least_upper_bound(Symbol t1, Symbol t2)
 {
-  InheritanceNode *n1 = lookup_class(t1);
+  ClassEntry *n1 = lookup_class(t1);
 
   while (!type_conforms(t2, n1->get_class()->get_name()))
     n1 = n1->get_parent();
@@ -651,8 +638,7 @@ void method_class::type_check(TypeEnvironment *env)
   }
 
   Symbol expr_type = expr->type_check(env);
-
-  if (!env->type_conforms(expr_type, return_type)) {
+  if ((expr_type != No_type) && !env->type_conforms(expr_type, return_type)) {
     env->semant_error(this) << "Inferred return type " << expr_type
       << " of method " << name << " does not conform to declared return type "
       << return_type << "." << endl;
@@ -748,7 +734,7 @@ Symbol cond_class::infer_type(TypeEnvironment *env)
 
   Symbol then_type = then_exp->type_check(env);
   Symbol else_type = else_exp->type_check(env);
-  return env->get_lub(then_type, else_type);
+  return env->get_least_upper_bound(then_type, else_type);
 }
 
 Symbol loop_class::infer_type(TypeEnvironment *env)
@@ -782,7 +768,7 @@ Symbol typcase_class::infer_type(TypeEnvironment *env)
     Symbol branch_type = branch->type_check(env);
     case_type = (case_type == No_type)
       ? branch_type
-      : env->get_lub(case_type, branch_type);
+      : env->get_least_upper_bound(case_type, branch_type);
   }
 
   return case_type;
@@ -907,8 +893,8 @@ Symbol eq_class::infer_type(TypeEnvironment *env)
   Symbol t1 = e1->type_check(env);
   Symbol t2 = e2->type_check(env);
 
-  InheritanceNode *n1 = env->lookup_class(t1);
-  InheritanceNode *n2 = env->lookup_class(t2);
+  ClassEntry *n1 = env->lookup_class(t1);
+  ClassEntry *n2 = env->lookup_class(t2);
 
   if (n1 != n2 && (!n1->is_inheritable() || !n2->is_inheritable()))
     env->semant_error(this) << "Illegal comparison with a basic type" << endl;
