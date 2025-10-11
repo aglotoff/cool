@@ -12,20 +12,20 @@
 #define FALSE 0
 
 class ClassTable;
-class ClassEntry;
+class ClassTableEntry;
 class TypeEnvironment;
 
 class TypeEnvironment {
 private:
   ClassTable *class_table;
-  ClassEntry *class_entry;
+  ClassTableEntry *class_entry;
   SymbolTable<Symbol, Entry> object_table;
   SymbolTable<Symbol, method_class> method_table;
 
 public:
-  TypeEnvironment(ClassTable *, ClassEntry *);
-  TypeEnvironment *copy_TypeEnvironment(ClassEntry *);
-  ClassEntry *lookup_class(Symbol);
+  TypeEnvironment(ClassTable *, ClassTableEntry *);
+  TypeEnvironment *copy_TypeEnvironment(ClassTableEntry *);
+  ClassTableEntry *lookup_class(Symbol);
 
   bool type_conforms(Symbol, Symbol);
   Symbol get_least_upper_bound(Symbol, Symbol);
@@ -51,8 +51,8 @@ public:
 // the inheritance graph.
 class ClassTable {
 private:
-  List<ClassEntry> *list;
-  SymbolTable<Symbol, ClassEntry> *table;
+  List<ClassTableEntry> *list;
+  SymbolTable<Symbol, ClassTableEntry> *table;
 
   int semant_errors;
   ostream& error_stream;
@@ -60,18 +60,21 @@ private:
   void install_basic_classes();
   void install_classes(Classes);
   void install_self_type();
-  void install_entry(ClassEntry *);
+  void install_entry(ClassTableEntry *);
 
   void check_inheritance();
   void build_inheritance_tree();
   void check_inheritance_cycles();
+
   void build_feature_tables();
+  void type_check_features();
+
   void check_main();
 
 public:
   ClassTable(Classes);
-  ClassEntry *lookup(Symbol);
-  void type_check();
+
+  ClassTableEntry *lookup(Symbol name) { return table->probe(name); }
 
   ostream& semant_error();
   ostream& semant_error(Class_ c);
@@ -80,14 +83,14 @@ public:
   int errors() { return semant_errors; }
 };
 
-class ClassEntry {
+class ClassTableEntry {
 private:
   Class_ node;
   bool basic;
   bool inheritable;
 
-  ClassEntry *parent;
-  List<ClassEntry> *children;
+  ClassTableEntry *parent;
+  List<ClassTableEntry> *children;
   bool reachable;
 
   TypeEnvironment *env;
@@ -95,17 +98,17 @@ private:
   void build_feature_tables();
 
 public:
-  ClassEntry(Class_, bool, bool);
+  ClassTableEntry(Class_, bool, bool);
 
-  Class_ get_class() { return node; };
+  Class_ get_node() { return node; };
   bool is_basic() { return basic; }
   bool is_inheritable() { return inheritable; }
   bool is_reachable() { return reachable; }
 
-  ClassEntry *get_parent() { return parent; }
-  void set_parent(ClassEntry *p) { parent = p; }
+  ClassTableEntry *get_parent() { return parent; }
+  void set_parent(ClassTableEntry *p) { parent = p; }
 
-  void add_child(ClassEntry *);
+  void add_child(ClassTableEntry *);
   void mark_reachable();
 
   void init_env(ClassTable *);

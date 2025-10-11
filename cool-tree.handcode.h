@@ -48,79 +48,79 @@ typedef Expressions_class *Expressions;
 typedef list_node<Case> Cases_class;
 typedef Cases_class *Cases;
 
-#define Program_EXTRAS                              \
-virtual void semant() = 0;                          \
-virtual void dump_with_types(ostream&, int) = 0; 
+#define Program_EXTRAS \
+  virtual void semant() = 0; \
+  virtual void dump_with_types(ostream&, int) = 0; 
 
-#define program_EXTRAS                              \
-void semant();                                      \
-void dump_with_types(ostream&, int);            
-
-
-#define Class__EXTRAS                               \
-virtual Symbol get_filename() = 0;                  \
-virtual Symbol get_name() = 0;                      \
-virtual Symbol get_parent() = 0;                    \
-virtual Features get_features() = 0;                \
-virtual void dump_with_types(ostream&,int) = 0;
-
-#define class__EXTRAS                               \
-Symbol get_filename() { return filename; }          \
-Symbol get_name() { return name; };                 \
-Symbol get_parent() { return parent; }              \
-Features get_features() { return features; }        \
-void dump_with_types(ostream&,int);                    
+#define program_EXTRAS \
+  void semant(); \
+  void dump_with_types(ostream&, int);            
 
 
-#define Feature_EXTRAS                              \
-virtual void dump_with_types(ostream&,int) = 0;     \
-virtual void add_to_table(TypeEnvironment *) = 0;   \
-virtual void type_check(TypeEnvironment *) = 0;
+#define Class__EXTRAS \
+  virtual Symbol get_filename() = 0; \
+  virtual Symbol get_name() = 0; \
+  virtual Symbol get_parent() = 0; \
+  virtual Features get_features() = 0; \
+  virtual void dump_with_types(ostream&,int) = 0;
 
-#define Feature_SHARED_EXTRAS                       \
-void dump_with_types(ostream&,int);                 \
-void add_to_table(TypeEnvironment *);               \
-void type_check(TypeEnvironment *);
+#define class__EXTRAS \
+  Symbol get_filename() { return filename; } \
+  Symbol get_name() { return name; }; \
+  Symbol get_parent() { return parent; } \
+  Features get_features() { return features; } \
+  void dump_with_types(ostream&,int);
 
-#define method_EXTRAS                               \
-  Formals get_formals() { return formals; }         \
+
+#define Feature_EXTRAS \
+  virtual void dump_with_types(ostream&,int) = 0; \
+  virtual void add_to_table(TypeEnvironment *) = 0; \
+  virtual void type_check(TypeEnvironment *) = 0;
+
+#define Feature_SHARED_EXTRAS \
+  void dump_with_types(ostream&,int); \
+  void add_to_table(TypeEnvironment *); \
+  void type_check(TypeEnvironment *);
+
+#define method_EXTRAS \
+  Formals get_formals() { return formals; } \
   Symbol get_return_type() { return return_type; }
 
 
-#define Formal_EXTRAS                               \
-virtual Symbol get_type() = 0;                      \
-virtual Symbol get_name() = 0;                      \
-virtual void dump_with_types(ostream&,int) = 0;
+#define Formal_EXTRAS \
+  virtual Symbol get_type() = 0; \
+  virtual Symbol get_name() = 0; \
+  virtual void dump_with_types(ostream&,int) = 0;
 
-#define formal_EXTRAS                               \
-Symbol get_name() { return name; }                  \
-Symbol get_type() { return type_decl; }             \
-void dump_with_types(ostream&,int);
-
-
-#define Case_EXTRAS                                 \
-virtual Symbol type_check(TypeEnvironment *) = 0;   \
-virtual Symbol get_type_decl() = 0;                 \
-virtual void dump_with_types(ostream& ,int) = 0;
-
-#define branch_EXTRAS                               \
-Symbol type_check(TypeEnvironment *);               \
-Symbol get_type_decl() { return type_decl; }        \
-void dump_with_types(ostream& ,int);
+#define formal_EXTRAS \
+  Symbol get_name() { return name; } \
+  Symbol get_type() { return type_decl; } \
+  void dump_with_types(ostream&,int);
 
 
-#define Expression_EXTRAS                                 \
-Symbol type;                                              \
-Symbol get_type() { return type; }                        \
-Expression set_type(Symbol s) { type = s; return this; }  \
-virtual Symbol infer_type(TypeEnvironment *) = 0;         \
-virtual void dump_with_types(ostream&,int) = 0;           \
-Symbol type_check(TypeEnvironment *);                     \
-void dump_type(ostream&, int);                            \
-Expression_class() { type = (Symbol) NULL; }
+#define Case_EXTRAS \
+  virtual Symbol type_check(TypeEnvironment *) = 0; \
+  virtual Symbol get_type_decl() = 0; \
+  virtual void dump_with_types(ostream& ,int) = 0;
 
-#define Expression_SHARED_EXTRAS                    \
-Symbol infer_type(TypeEnvironment *);               \
-void dump_with_types(ostream&,int); 
+#define branch_EXTRAS \
+  Symbol type_check(TypeEnvironment *); \
+  Symbol get_type_decl() { return type_decl; } \
+  void dump_with_types(ostream& ,int);
+
+
+#define Expression_EXTRAS \
+  Symbol type; \
+  Symbol get_type() { return type; } \
+  Expression set_type(Symbol s) { type = s; return this; } \
+  virtual Symbol infer_type(TypeEnvironment *) = 0; \
+  virtual void dump_with_types(ostream&,int) = 0; \
+  Symbol type_check(TypeEnvironment *); \
+  void dump_type(ostream&, int); \
+  Expression_class() { type = (Symbol) NULL; }
+
+#define Expression_SHARED_EXTRAS \
+  Symbol infer_type(TypeEnvironment *); \
+  void dump_with_types(ostream&,int); 
 
 #endif
