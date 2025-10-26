@@ -11,18 +11,30 @@ enum Basicness     {Basic, NotBasic};
 class CgenClassTable;
 typedef CgenClassTable *CgenClassTableP;
 
-class CgenNode;
-typedef CgenNode *CgenNodeP;
+class CgenClassTableEntry;
+typedef CgenClassTableEntry *CgenClassTableEntryP;
 
-class CgenClassTable : public SymbolTable<Symbol,CgenNode> {
+class CgenEnvironment {
 private:
-   List<CgenNode> *nds;
+  CgenClassTable *class_table;
+  CgenClassTableEntry *class_entry;
+
+public:
+  CgenEnvironment(CgenClassTable *, CgenClassTableEntry *);
+  ostream& out_stream();
+};
+
+class CgenClassTable {
+private:
+   List<CgenClassTableEntry> *list;
+   SymbolTable<Symbol,CgenClassTableEntry> *table;
+
    ostream& str;
 
-   int next_tag;
-   int stringclasstag;
-   int intclasstag;
-   int boolclasstag;
+   int next_class_tag;
+   int string_class_tag;
+   int int_class_tag;
+   int bool_class_tag;
 
 // The following methods emit code for
 // constants and global declarations.
@@ -36,48 +48,50 @@ private:
 
 // The following creates an inheritance graph from
 // a list of classes.  The graph is implemented as
-// a tree of `CgenNode', and class names are placed
+// a tree of `CgenClassTableEntry', and class names are placed
 // in the base class symbol table.
 
    void install_basic_classes();
-   void install_class(CgenNodeP nd);
+   void install_class(CgenClassTableEntryP);
    void install_classes(Classes cs);
-
    void build_inheritance_tree();
-   void set_relations(CgenNodeP nd);
 
 public:
-   CgenClassTable(Classes, ostream& str);
+   CgenClassTable(Classes, ostream&);
    void code();
-   CgenNodeP root();
+   CgenClassTableEntryP root();
 
-   int assign_tag(Symbol);
+   ostream& out_stream() { return str; }
+
+   int assign_class_tag(Symbol);
 };
 
 
-class CgenNode : public class__class {
-private: 
-   CgenNodeP parentnd;                        // Parent of class
-   List<CgenNode> *children;                  // Children of class
+class CgenClassTableEntry {
+private:
+   Class_ node;
+   CgenClassTableEntryP parent;                        // Parent of class
+   List<CgenClassTableEntry> *children;                  // Children of class
    Basicness basic_status;                    // `Basic' if class is basic
                                               // `NotBasic' otherwise
-   CgenClassTableP class_table;
-
    int tag;
 
+   CgenEnvironment *env;
+
 public:
-   CgenNode(Class_, Basicness, CgenClassTableP);
+   CgenClassTableEntry(Class_, Basicness);
 
-   void add_child(CgenNodeP child);
-   List<CgenNode> *get_children() { return children; }
-   void set_parentnd(CgenNodeP p);
-   CgenNodeP get_parentnd() { return parentnd; }
-   int basic() { return (basic_status == Basic); }
-
-   void init();
+   Class_ get_node() { return node; };
+   CgenClassTableEntryP get_parent() { return parent; }
+   List<CgenClassTableEntry> *get_children() { return children; }
    int get_tag() const { return tag; }
+   int is_basic() { return (basic_status == Basic); }
 
-   void code_class_nametab(ostream&);
+   void add_child(CgenClassTableEntryP);
+   void set_parent(CgenClassTableEntryP);
+
+   void init(CgenClassTable *);
+   void code_class_nametab();
 };
 
 class BoolConst 
