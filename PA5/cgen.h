@@ -14,20 +14,22 @@ typedef CgenClassTable *CgenClassTableP;
 class CgenClassTableEntry;
 typedef CgenClassTableEntry *CgenClassTableEntryP;
 
-class CgenEnvironment {
+class CgenEnvironment {};
+
+class MethodBinding {
 private:
-  CgenClassTable *class_table;
-  CgenClassTableEntry *class_entry;
+   Symbol class_name;
+   Symbol method_name;
 
 public:
-  CgenEnvironment(CgenClassTable *, CgenClassTableEntry *);
-  ostream& out_stream();
+   MethodBinding(Symbol, Symbol);
+   void code_ref(ostream &);
 };
 
 class CgenClassTable {
 private:
    List<CgenClassTableEntry> *list;
-   SymbolTable<Symbol,CgenClassTableEntry> *table;
+   SymbolTable<Symbol, CgenClassTableEntry> *table;
 
    ostream& str;
 
@@ -45,6 +47,7 @@ private:
    void code_select_gc();
    void code_constants();
    void code_class_nametab();
+   void code_dispatch_tables();
 
 // The following creates an inheritance graph from
 // a list of classes.  The graph is implemented as
@@ -60,8 +63,7 @@ public:
    CgenClassTable(Classes, ostream&);
    void code();
    CgenClassTableEntryP root();
-
-   ostream& out_stream() { return str; }
+   CgenClassTableEntry *lookup(Symbol name) { return table->probe(name); }
 
    int assign_class_tag(Symbol);
 };
@@ -74,12 +76,17 @@ private:
    List<CgenClassTableEntry> *children;                  // Children of class
    Basicness basic_status;                    // `Basic' if class is basic
                                               // `NotBasic' otherwise
+   
    int tag;
+   CgenClassTable *class_table;
 
    CgenEnvironment *env;
+   SymbolTable<int, Entry> method_name_table;
+   SymbolTable<Symbol, MethodBinding> method_table;
+   int next_method_offset;
 
 public:
-   CgenClassTableEntry(Class_, Basicness);
+   CgenClassTableEntry(Class_, Basicness, CgenClassTable *);
 
    Class_ get_node() { return node; };
    CgenClassTableEntryP get_parent() { return parent; }
@@ -90,8 +97,11 @@ public:
    void add_child(CgenClassTableEntryP);
    void set_parent(CgenClassTableEntryP);
 
-   void init(CgenClassTable *);
-   void code_class_nametab();
+   void init(int, SymbolTable<int, Entry>, SymbolTable<Symbol, MethodBinding>);
+   void add_method(Symbol);
+
+   void code_class_nametab(ostream&);
+   void code_dispatch_table(ostream&);
 };
 
 class BoolConst 

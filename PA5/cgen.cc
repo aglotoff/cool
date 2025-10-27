@@ -507,7 +507,10 @@ CgenClassTable::CgenClassTable(Classes classes, ostream& s)
   install_classes(classes);
   build_inheritance_tree();
 
-  root()->init(this);
+  root()->init(
+    0,
+    SymbolTable<int, Entry>(),
+    SymbolTable<Symbol, MethodBinding>());
 
   string_class_tag = table->probe(Str)->get_tag();
   int_class_tag = table->probe(Int)->get_tag();
@@ -538,21 +541,24 @@ void CgenClassTable::install_basic_classes()
         No_class,
         nil_Features(),
         filename),
-			Basic));
+			Basic,
+      this));
   table->addid(SELF_TYPE,
 	  new CgenClassTableEntry(
       class_(SELF_TYPE,
         No_class,
         nil_Features(),
         filename),
-			Basic));
+			Basic,
+      this));
   table->addid(prim_slot,
 	  new CgenClassTableEntry(
       class_(prim_slot,
         No_class,
         nil_Features(),
         filename),
-			Basic));
+			Basic,
+      this));
 
 // 
 // The Object class has no parent class. Its methods are
@@ -574,7 +580,8 @@ void CgenClassTable::install_basic_classes()
             single_Features(method(type_name, nil_Formals(), Str, no_expr()))),
           single_Features(method(copy, nil_Formals(), SELF_TYPE, no_expr()))),
 	   filename),
-    Basic));
+    Basic,
+    this));
 
 // 
 // The IO class inherits from Object. Its methods are
@@ -597,7 +604,8 @@ void CgenClassTable::install_basic_classes()
             single_Features(method(in_string, nil_Formals(), Str, no_expr()))),
           single_Features(method(in_int, nil_Formals(), Int, no_expr()))),
         filename),	    
-    Basic));
+    Basic,
+    this));
 
 //
 // The Int class has no methods and only a single attribute, the
@@ -609,7 +617,8 @@ void CgenClassTable::install_basic_classes()
         Object,
         single_Features(attr(val, prim_slot, no_expr())),
         filename),
-     Basic));
+      Basic,
+      this));
 
 //
 // Bool also has only the "val" slot.
@@ -620,7 +629,8 @@ void CgenClassTable::install_basic_classes()
         Object,
         single_Features(attr(val, prim_slot, no_expr())),
         filename),
-      Basic));
+      Basic,
+      this));
 
 //
 // The class Str has a number of slots and operations:
@@ -651,7 +661,8 @@ void CgenClassTable::install_basic_classes()
             Str, 
             no_expr()))),
 	      filename),
-      Basic));
+      Basic,
+      this));
 }
 
 //
@@ -660,7 +671,7 @@ void CgenClassTable::install_basic_classes()
 void CgenClassTable::install_classes(Classes cs)
 {
   for (int i = cs->first(); cs->more(i); i = cs->next(i))
-    install_class(new CgenClassTableEntry(cs->nth(i), NotBasic));
+    install_class(new CgenClassTableEntry(cs->nth(i), NotBasic, this));
 }
 
 void CgenClassTable::install_class(CgenClassTableEntryP entry)
@@ -783,7 +794,13 @@ void CgenClassTable::code_select_gc()
 void CgenClassTable::code_class_nametab()
 {
   str << CLASSNAMETAB << LABEL;
-  root()->code_class_nametab();
+  root()->code_class_nametab(str);
+}
+
+void CgenClassTable::code_dispatch_tables()
+{
+  for (List<CgenClassTableEntry> *l = list; l; l = l->tl())
+    l->hd()->code_dispatch_table(str);
 }
 
 //********************************************************
@@ -837,6 +854,9 @@ void CgenClassTable::code()
   if (cgen_debug) cout << "coding class_nameTab" << endl;
   code_class_nametab();
 
+  if (cgen_debug) cout << "coding dispatch tables" << endl;
+  code_dispatch_tables();
+
   if (cgen_debug) cout << "coding global text" << endl;
   code_global_text();
 
@@ -851,19 +871,19 @@ CgenClassTableEntryP CgenClassTable::root()
    return table->probe(Object);
 }
 
-
 ///////////////////////////////////////////////////////////////////////
 //
 // CgenClassTableEntry methods
 //
 ///////////////////////////////////////////////////////////////////////
 
-CgenClassTableEntry::CgenClassTableEntry(Class_ nd, Basicness bstatus)
-: parent(NULL),
+CgenClassTableEntry::CgenClassTableEntry(Class_ nd, Basicness bstatus, CgenClassTable *ct)
+: node(nd),
+  parent(NULL),
   children(NULL),
-  node(nd),
   basic_status(bstatus),
-  tag(-1)
+  tag(-1),
+  class_table(ct)
 {}
 
 void CgenClassTableEntry::add_child(CgenClassTableEntryP n)
@@ -878,41 +898,89 @@ void CgenClassTableEntry::set_parent(CgenClassTableEntryP p)
   parent = p;
 }
 
-void CgenClassTableEntry::init(CgenClassTable *class_table)
+void CgenClassTableEntry::init(
+  int nmo,
+  SymbolTable<int, Entry> mnt,
+  SymbolTable<Symbol, MethodBinding> mt)
 {
   tag = class_table->assign_class_tag(node->get_name());
-  env = new CgenEnvironment(class_table, this);
+
+  next_method_offset = nmo;
+  method_name_table = mnt;
+  method_table = mt;
+
+  method_name_table.enterscope();
+  method_table.enterscope();
+
+  Features features = node->get_features();
+
+  for (int i = features->first(); features->more(i); i = features->next(i))
+    features->nth(i)->add_feature(this);
 
   for (List<CgenClassTableEntry> *l = children; l; l = l->tl())
-    l->hd()->init(class_table);
+    l->hd()->init(next_method_offset, method_name_table, method_table);
 }
 
-void CgenClassTableEntry::code_class_nametab()
+void CgenClassTableEntry::code_class_nametab(ostream& str)
 {
   StringEntry *s = stringtable.lookup_string(node->get_name()->get_string());
 
-  env->out_stream() << WORD;
-  s->code_ref(env->out_stream());
-  env->out_stream() << endl;
+  str << WORD; s->code_ref(str); str << endl;
 
   for (List<CgenClassTableEntry> *l = children; l; l = l->tl())
-    l->hd()->code_class_nametab();
+    l->hd()->code_class_nametab(str);
+}
+
+void CgenClassTableEntry::code_dispatch_table(ostream& str)
+{
+  emit_disptable_ref(node->get_name(), str); str << LABEL;
+
+  for (int offset = 0; offset < next_method_offset; offset++) {
+    Symbol method_name = method_name_table.lookup(offset);
+    MethodBinding *method_binding = method_table.lookup(method_name);
+
+    str << WORD; method_binding->code_ref(str); str << endl;
+  }
+}
+
+void CgenClassTableEntry::add_method(Symbol method_name)
+{
+  if (!method_table.lookup(method_name))
+    method_name_table.addid(next_method_offset++, method_name);
+
+  method_table.addid(method_name,
+    new MethodBinding(node->get_name(), method_name));
 }
 
 ///////////////////////////////////////////////////////////////////////
 //
-// CgenEnvironment methods
+// MethodBinding methods
 //
 ///////////////////////////////////////////////////////////////////////
 
-CgenEnvironment::CgenEnvironment(CgenClassTable *ct, CgenClassTableEntry *ce)
-: class_table(ct),
-  class_entry(ce)
+MethodBinding::MethodBinding(Symbol cn, Symbol mn)
+: class_name(cn),
+  method_name(mn)
 {}
 
-ostream& CgenEnvironment::out_stream()
+void MethodBinding::code_ref(ostream &s)
 {
-  return class_table->out_stream();
+  emit_method_ref(class_name, method_name, s);
+}
+
+///////////////////////////////////////////////////////////////////////
+//
+// Feature methods
+//
+///////////////////////////////////////////////////////////////////////
+
+void attr_class::add_feature(CgenClassTableEntry *e)
+{
+}
+
+void method_class::add_feature(CgenClassTableEntry *entry)
+{
+  entry->add_method(this->name);
 }
 
 //******************************************************************
@@ -925,111 +993,105 @@ ostream& CgenEnvironment::out_stream()
 //
 //*****************************************************************
 
-void assign_class::code(CgenEnvironment *env)
+void assign_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void static_dispatch_class::code(CgenEnvironment *env)
+void static_dispatch_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void dispatch_class::code(CgenEnvironment *env)
+void dispatch_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void cond_class::code(CgenEnvironment *env)
+void cond_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void loop_class::code(CgenEnvironment *env)
+void loop_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void typcase_class::code(CgenEnvironment *env)
+void typcase_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void block_class::code(CgenEnvironment *env)
+void block_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void let_class::code(CgenEnvironment *env)
+void let_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void plus_class::code(CgenEnvironment *env)
+void plus_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void sub_class::code(CgenEnvironment *env)
+void sub_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void mul_class::code(CgenEnvironment *env)
+void mul_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void divide_class::code(CgenEnvironment *env)
+void divide_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void neg_class::code(CgenEnvironment *env)
+void neg_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void lt_class::code(CgenEnvironment *env)
+void lt_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void eq_class::code(CgenEnvironment *env)
+void eq_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void leq_class::code(CgenEnvironment *env)
+void leq_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void comp_class::code(CgenEnvironment *env)
+void comp_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void int_const_class::code(CgenEnvironment *env)  
+void int_const_class::code(ostream& s, CgenEnvironment *)  
 {
   //
   // Need to be sure we have an IntEntry *, not an arbitrary Symbol
   //
-  emit_load_int(
-    ACC,
-    inttable.lookup_string(token->get_string()),
-    env->out_stream());
+  emit_load_int(ACC, inttable.lookup_string(token->get_string()), s);
 }
 
-void string_const_class::code(CgenEnvironment *env)
+void string_const_class::code(ostream& s, CgenEnvironment *)
 {
-  emit_load_string(
-    ACC,
-    stringtable.lookup_string(token->get_string()),
-    env->out_stream());
+  emit_load_string(ACC, stringtable.lookup_string(token->get_string()), s);
 }
 
-void bool_const_class::code(CgenEnvironment *env)
+void bool_const_class::code(ostream& s, CgenEnvironment *)
 {
-  emit_load_bool(ACC, BoolConst(val), env->out_stream());
+  emit_load_bool(ACC, BoolConst(val), s);
 }
 
-void new__class::code(CgenEnvironment *env)
+void new__class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void isvoid_class::code(CgenEnvironment *env)
+void isvoid_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void no_expr_class::code(CgenEnvironment *env)
+void no_expr_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void object_class::code(CgenEnvironment *env)
+void object_class::code(ostream&, CgenEnvironment *)
 {
 }
 
