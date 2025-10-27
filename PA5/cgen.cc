@@ -393,18 +393,17 @@ void StringEntry::code_def(ostream& s, int stringclasstag)
   // Add -1 eye catcher
   s << WORD << "-1" << endl;
 
-  code_ref(s); s << LABEL                                             // label
-    << WORD << stringclasstag << endl                                 // tag
-    << WORD << (DEFAULT_OBJFIELDS + STRING_SLOTS + (len+4)/4) << endl // size
-    << WORD;
+  code_ref(s); s << LABEL;                                              // label
+  s << WORD << stringclasstag << endl;                                  // tag
+  s << WORD << (DEFAULT_OBJFIELDS + STRING_SLOTS + (len+4)/4) << endl;  // size
+  
+  // dispatch table
+  s << WORD; emit_disptable_ref(Str, s); s << endl;   
+                     
+  s << WORD; lensym->code_ref(s); s << endl;          // string length
+  emit_string_constant(s,str);                        // ascii string
 
-
- /***** Add dispatch information for class String ******/
-
-  s << endl;                                              // dispatch table
-  s << WORD;  lensym->code_ref(s);  s << endl;            // string length
-  emit_string_constant(s,str);                            // ascii string
-  s << ALIGN;                                             // align to word
+  s << ALIGN;                                         // align to word
 }
 
 //
@@ -435,14 +434,13 @@ void IntEntry::code_def(ostream &s, int intclasstag)
   // Add -1 eye catcher
   s << WORD << "-1" << endl;
 
-  code_ref(s);  s << LABEL                              // label
-    << WORD << intclasstag << endl                      // class tag
-    << WORD << (DEFAULT_OBJFIELDS + INT_SLOTS) << endl  // object size
-    << WORD; 
+  code_ref(s);  s << LABEL;                              // label
+  s << WORD << intclasstag << endl;                      // class tag
+  s << WORD << (DEFAULT_OBJFIELDS + INT_SLOTS) << endl;  // object size
 
- /***** Add dispatch information for class Int ******/
+  // dispatch table
+  s << WORD; emit_disptable_ref(Int, s); s << endl;   
 
-  s << endl;                                          // dispatch table
   s << WORD << str << endl;                           // integer value
 }
 
@@ -477,14 +475,13 @@ void BoolConst::code_def(ostream& s, int boolclasstag)
   // Add -1 eye catcher
   s << WORD << "-1" << endl;
 
-  code_ref(s); s << LABEL                                  // label
-    << WORD << boolclasstag << endl                       // class tag
-    << WORD << (DEFAULT_OBJFIELDS + BOOL_SLOTS) << endl   // object size
-    << WORD;
+  code_ref(s); s << LABEL;                                 // label
+  s << WORD << boolclasstag << endl;                       // class tag
+  s << WORD << (DEFAULT_OBJFIELDS + BOOL_SLOTS) << endl;   // object size
 
- /***** Add dispatch information for class Bool ******/
+  // dispatch table
+  s << WORD; emit_disptable_ref(Bool, s); s << endl;   
 
-  s << endl;                                            // dispatch table
   s << WORD << val << endl;                             // value (0 or 1)
 }
 
@@ -510,7 +507,11 @@ CgenClassTable::CgenClassTable(Classes classes, ostream& s)
   root()->init(
     0,
     SymbolTable<int, Entry>(),
-    SymbolTable<Symbol, MethodBinding>());
+    SymbolTable<Symbol, MethodBinding>(),
+    0,
+    SymbolTable<int, Entry>(),
+    SymbolTable<Symbol, AttrBinding>()
+  );
 
   string_class_tag = table->probe(Str)->get_tag();
   int_class_tag = table->probe(Int)->get_tag();
@@ -803,6 +804,12 @@ void CgenClassTable::code_dispatch_tables()
     l->hd()->code_dispatch_table(str);
 }
 
+void CgenClassTable::code_prototype_objects()
+{
+  for (List<CgenClassTableEntry> *l = list; l; l = l->tl())
+    l->hd()->code_prototype_object(str);
+}
+
 //********************************************************
 //
 // Emit code to reserve space for and initialize all of
@@ -847,15 +854,14 @@ void CgenClassTable::code()
   if (cgen_debug) cout << "coding constants" << endl;
   code_constants();
 
-//                 Add your code to emit
-//                   - prototype objects
-//                   - dispatch tables
-//
   if (cgen_debug) cout << "coding class_nameTab" << endl;
   code_class_nametab();
 
   if (cgen_debug) cout << "coding dispatch tables" << endl;
   code_dispatch_tables();
+
+  if (cgen_debug) cout << "coding prototype objects" << endl;
+  code_prototype_objects();
 
   if (cgen_debug) cout << "coding global text" << endl;
   code_global_text();
@@ -901,7 +907,10 @@ void CgenClassTableEntry::set_parent(CgenClassTableEntryP p)
 void CgenClassTableEntry::init(
   int nmo,
   SymbolTable<int, Entry> mnt,
-  SymbolTable<Symbol, MethodBinding> mt)
+  SymbolTable<Symbol, MethodBinding> mt,
+  int nao,
+  SymbolTable<int, Entry> ant,
+  SymbolTable<Symbol, AttrBinding> at)
 {
   tag = class_table->assign_class_tag(node->get_name());
 
@@ -909,8 +918,15 @@ void CgenClassTableEntry::init(
   method_name_table = mnt;
   method_table = mt;
 
+  next_attr_offset = nao;
+  attr_name_table = ant;
+  attr_table = at;
+
   method_name_table.enterscope();
   method_table.enterscope();
+
+  attr_name_table.enterscope();
+  attr_table.enterscope();
 
   Features features = node->get_features();
 
@@ -918,7 +934,8 @@ void CgenClassTableEntry::init(
     features->nth(i)->add_feature(this);
 
   for (List<CgenClassTableEntry> *l = children; l; l = l->tl())
-    l->hd()->init(next_method_offset, method_name_table, method_table);
+    l->hd()->init(next_method_offset, method_name_table, method_table,
+      next_attr_offset, attr_name_table, attr_table);
 }
 
 void CgenClassTableEntry::code_class_nametab(ostream& str)
@@ -943,6 +960,55 @@ void CgenClassTableEntry::code_dispatch_table(ostream& str)
   }
 }
 
+void CgenClassTableEntry::code_prototype_object(ostream &s)
+{
+  // Add -1 eye catcher
+  s << WORD << "-1" << endl;
+
+  emit_protobj_ref(node->get_name(), s); s << LABEL;          // label
+  s << WORD << tag << endl;                                   // tag
+  s << WORD << DEFAULT_OBJFIELDS + next_attr_offset << endl;  // size
+  s << WORD; emit_disptable_ref(node->get_name(), s); s << endl;
+
+  for (int i = 0; i < next_attr_offset; i++) {
+    Symbol attr_name = attr_name_table.lookup(i);
+    AttrBinding *attr_binding = attr_table.lookup(attr_name);
+
+    s << WORD;
+
+    if (attr_binding->type == Int)
+      inttable.lookup_string("0")->code_ref(s);
+    else if (attr_binding->type == Str)
+      stringtable.lookup_string("")->code_ref(s);
+    else if (attr_binding->type == Bool)
+      falsebool.code_ref(s);
+    else
+      s << "0";
+
+    s << endl;
+  }
+
+//   code_ref(s); s << LABEL                                             // label
+//     << WORD << stringclasstag << endl                                 // tag
+//     << WORD << (DEFAULT_OBJFIELDS + STRING_SLOTS + (len+4)/4) << endl // size
+//     << WORD;
+
+
+//  /***** Add dispatch information for class String ******/
+
+//   s << endl;                                              // dispatch table
+//   s << WORD;  lensym->code_ref(s);  s << endl;            // string length
+//   emit_string_constant(s,str);                            // ascii string
+//   s << ALIGN;                                             // align to word
+}
+
+
+void CgenClassTableEntry::add_attr(Symbol name, Symbol type)
+{
+  attr_name_table.addid(next_attr_offset++, name);
+  attr_table.addid(name, new AttrBinding(name, type));
+}
+
 void CgenClassTableEntry::add_method(Symbol method_name)
 {
   if (!method_table.lookup(method_name))
@@ -951,6 +1017,17 @@ void CgenClassTableEntry::add_method(Symbol method_name)
   method_table.addid(method_name,
     new MethodBinding(node->get_name(), method_name));
 }
+
+///////////////////////////////////////////////////////////////////////
+//
+// AttrBinding methods
+//
+///////////////////////////////////////////////////////////////////////
+
+AttrBinding::AttrBinding(Symbol n, Symbol t)
+: name(n),
+  type(t)
+{}
 
 ///////////////////////////////////////////////////////////////////////
 //
@@ -974,8 +1051,9 @@ void MethodBinding::code_ref(ostream &s)
 //
 ///////////////////////////////////////////////////////////////////////
 
-void attr_class::add_feature(CgenClassTableEntry *e)
+void attr_class::add_feature(CgenClassTableEntry *entry)
 {
+  entry->add_attr(this->name, this->type_decl);
 }
 
 void method_class::add_feature(CgenClassTableEntry *entry)

@@ -26,6 +26,15 @@ public:
    void code_ref(ostream &);
 };
 
+class AttrBinding {
+public:
+   Symbol name;
+   Symbol type;
+
+public:
+   AttrBinding(Symbol, Symbol);
+};
+
 class CgenClassTable {
 private:
    List<CgenClassTableEntry> *list;
@@ -48,6 +57,7 @@ private:
    void code_constants();
    void code_class_nametab();
    void code_dispatch_tables();
+   void code_prototype_objects();
 
 // The following creates an inheritance graph from
 // a list of classes.  The graph is implemented as
@@ -81,9 +91,14 @@ private:
    CgenClassTable *class_table;
 
    CgenEnvironment *env;
+
    SymbolTable<int, Entry> method_name_table;
    SymbolTable<Symbol, MethodBinding> method_table;
    int next_method_offset;
+
+   SymbolTable<int, Entry> attr_name_table;
+   SymbolTable<Symbol, AttrBinding> attr_table;
+   int next_attr_offset;
 
 public:
    CgenClassTableEntry(Class_, Basicness, CgenClassTable *);
@@ -97,11 +112,15 @@ public:
    void add_child(CgenClassTableEntryP);
    void set_parent(CgenClassTableEntryP);
 
-   void init(int, SymbolTable<int, Entry>, SymbolTable<Symbol, MethodBinding>);
+   void init(int, SymbolTable<int, Entry>, SymbolTable<Symbol, MethodBinding>,
+      int, SymbolTable<int, Entry>, SymbolTable<Symbol, AttrBinding>);
+
    void add_method(Symbol);
+   void add_attr(Symbol, Symbol);
 
    void code_class_nametab(ostream&);
    void code_dispatch_table(ostream&);
+   void code_prototype_object(ostream&);
 };
 
 class BoolConst 
