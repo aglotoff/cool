@@ -810,6 +810,21 @@ void CgenClassTable::code_prototype_objects()
     l->hd()->code_prototype_object(str);
 }
 
+void CgenClassTable::code_object_init()
+{
+  for (List<CgenClassTableEntry> *l = list; l; l = l->tl())
+    l->hd()->code_init(str);
+}
+
+void CgenClassTable::code_methods()
+{
+  for (List<CgenClassTableEntry> *l = list; l; l = l->tl()) {
+    CgenClassTableEntry *entry = l->hd();
+    if (!entry->is_basic())
+      l->hd()->code_methods(str);
+  }
+}
+
 //********************************************************
 //
 // Emit code to reserve space for and initialize all of
@@ -866,10 +881,11 @@ void CgenClassTable::code()
   if (cgen_debug) cout << "coding global text" << endl;
   code_global_text();
 
-//                 Add your code to emit
-//                   - object initializer
-//                   - the class methods
-//                   - etc...
+  if (cgen_debug) cout << "coding object initializers" << endl;
+  code_object_init();
+
+  if (cgen_debug) cout << "coding class methods" << endl;
+  code_methods();
 }
 
 CgenClassTableEntryP CgenClassTable::root()
@@ -987,21 +1003,13 @@ void CgenClassTableEntry::code_prototype_object(ostream &s)
 
     s << endl;
   }
-
-//   code_ref(s); s << LABEL                                             // label
-//     << WORD << stringclasstag << endl                                 // tag
-//     << WORD << (DEFAULT_OBJFIELDS + STRING_SLOTS + (len+4)/4) << endl // size
-//     << WORD;
-
-
-//  /***** Add dispatch information for class String ******/
-
-//   s << endl;                                              // dispatch table
-//   s << WORD;  lensym->code_ref(s);  s << endl;            // string length
-//   emit_string_constant(s,str);                            // ascii string
-//   s << ALIGN;                                             // align to word
 }
 
+void CgenClassTableEntry::code_init(ostream &s)
+{
+  emit_init_ref(node->get_name(), s); s << LABEL;
+  emit_return(s);
+}
 
 void CgenClassTableEntry::add_attr(Symbol name, Symbol type)
 {
@@ -1016,6 +1024,14 @@ void CgenClassTableEntry::add_method(Symbol method_name)
 
   method_table.addid(method_name,
     new MethodBinding(node->get_name(), method_name));
+}
+
+void CgenClassTableEntry::code_methods(ostream &s)
+{
+  Features features = node->get_features();
+
+  for (int i = features->first(); features->more(i); i = features->next(i))
+    features->nth(i)->code_method(s, env);
 }
 
 ///////////////////////////////////////////////////////////////////////
@@ -1056,9 +1072,19 @@ void attr_class::add_feature(CgenClassTableEntry *entry)
   entry->add_attr(this->name, this->type_decl);
 }
 
+void attr_class::code_method(ostream &, CgenEnvironment *)
+{
+}
+
 void method_class::add_feature(CgenClassTableEntry *entry)
 {
   entry->add_method(this->name);
+}
+
+void method_class::code_method(ostream &s, CgenEnvironment *)
+{
+  emit_method_ref(Main, name, s); s << LABEL;
+  emit_return(s);
 }
 
 //******************************************************************
