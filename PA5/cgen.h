@@ -56,10 +56,6 @@ private:
    void code_select_gc();
    void code_constants();
    void code_class_nametab();
-   void code_dispatch_tables();
-   void code_prototype_objects();
-   void code_object_init();
-   void code_methods();
 
 // The following creates an inheritance graph from
 // a list of classes.  The graph is implemented as

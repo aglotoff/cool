@@ -335,7 +335,6 @@ static void emit_fetch_int(char *dest, char *source, ostream& s)
 static void emit_store_int(char *source, char *dest, ostream& s)
 { emit_store(source, DEFAULT_OBJFIELDS, dest, s); }
 
-
 static void emit_test_collector(ostream &s)
 {
   emit_push(ACC, s);
@@ -385,7 +384,6 @@ void StringEntry::code_ref(ostream& s)
 // Emit code for a constant String.
 // You should fill in the code naming the dispatch table.
 //
-
 void StringEntry::code_def(ostream& s, int stringclasstag)
 {
   IntEntryP lensym = inttable.add_int(len);
@@ -703,6 +701,43 @@ void CgenClassTable::build_inheritance_tree()
   }
 }
 
+int CgenClassTable::assign_class_tag(Symbol name)
+{
+  // Add class name to string table
+  stringtable.add_string(name->get_string());
+  return next_class_tag++;
+}
+
+void CgenClassTable::code()
+{
+  if (cgen_debug) cout << "coding global data" << endl;
+  code_global_data();
+
+  if (cgen_debug) cout << "choosing gc" << endl;
+  code_select_gc();
+
+  if (cgen_debug) cout << "coding constants" << endl;
+  code_constants();
+
+  if (cgen_debug) cout << "coding class_nameTab" << endl;
+  code_class_nametab();
+
+  if (cgen_debug) cout << "coding dispatch tables" << endl;
+  root()->code_dispatch_table(str);
+
+  if (cgen_debug) cout << "coding prototype objects" << endl;
+  root()->code_prototype_object(str);
+
+  if (cgen_debug) cout << "coding global text" << endl;
+  code_global_text();
+
+  if (cgen_debug) cout << "coding object initializers" << endl;
+  root()->code_init(str);
+
+  if (cgen_debug) cout << "coding class methods" << endl;
+  root()->code_methods(str);
+}
+
 //***************************************************
 //
 //  Emit code to start the .data segment and to
@@ -743,39 +778,6 @@ void CgenClassTable::code_global_data()
       << WORD << string_class_tag << endl;    
 }
 
-
-//***************************************************
-//
-//  Emit code to start the .text segment and to
-//  declare the global names.
-//
-//***************************************************
-
-void CgenClassTable::code_global_text()
-{
-  str << GLOBAL << HEAP_START << endl
-      << HEAP_START << LABEL 
-      << WORD << 0 << endl
-      << "\t.text" << endl
-      << GLOBAL;
-  emit_init_ref(idtable.add_string("Main"), str);
-  str << endl << GLOBAL;
-  emit_init_ref(idtable.add_string("Int"),str);
-  str << endl << GLOBAL;
-  emit_init_ref(idtable.add_string("String"),str);
-  str << endl << GLOBAL;
-  emit_init_ref(idtable.add_string("Bool"),str);
-  str << endl << GLOBAL;
-  emit_method_ref(idtable.add_string("Main"), idtable.add_string("main"), str);
-  str << endl;
-}
-
-void CgenClassTable::code_bools(int boolclasstag)
-{
-  falsebool.code_def(str,boolclasstag);
-  truebool.code_def(str,boolclasstag);
-}
-
 void CgenClassTable::code_select_gc()
 {
   //
@@ -790,39 +792,6 @@ void CgenClassTable::code_select_gc()
   str << GLOBAL << "_MemMgr_TEST" << endl;
   str << "_MemMgr_TEST:" << endl;
   str << WORD << (cgen_Memmgr_Test == GC_TEST) << endl;
-}
-
-void CgenClassTable::code_class_nametab()
-{
-  str << CLASSNAMETAB << LABEL;
-  root()->code_class_nametab(str);
-}
-
-void CgenClassTable::code_dispatch_tables()
-{
-  for (List<CgenClassTableEntry> *l = list; l; l = l->tl())
-    l->hd()->code_dispatch_table(str);
-}
-
-void CgenClassTable::code_prototype_objects()
-{
-  for (List<CgenClassTableEntry> *l = list; l; l = l->tl())
-    l->hd()->code_prototype_object(str);
-}
-
-void CgenClassTable::code_object_init()
-{
-  for (List<CgenClassTableEntry> *l = list; l; l = l->tl())
-    l->hd()->code_init(str);
-}
-
-void CgenClassTable::code_methods()
-{
-  for (List<CgenClassTableEntry> *l = list; l; l = l->tl()) {
-    CgenClassTableEntry *entry = l->hd();
-    if (!entry->is_basic())
-      l->hd()->code_methods(str);
-  }
 }
 
 //********************************************************
@@ -851,41 +820,42 @@ void CgenClassTable::code_constants()
   code_bools(bool_class_tag);
 }
 
-int CgenClassTable::assign_class_tag(Symbol name)
+void CgenClassTable::code_bools(int boolclasstag)
 {
-  // Add class name to string table
-  stringtable.add_string(name->get_string());
-  return next_class_tag++;
+  falsebool.code_def(str, boolclasstag);
+  truebool.code_def(str, boolclasstag);
 }
 
-void CgenClassTable::code()
+void CgenClassTable::code_class_nametab()
 {
-  if (cgen_debug) cout << "coding global data" << endl;
-  code_global_data();
+  str << CLASSNAMETAB << LABEL;
+  root()->code_class_nametab(str);
+}
 
-  if (cgen_debug) cout << "choosing gc" << endl;
-  code_select_gc();
+//***************************************************
+//
+//  Emit code to start the .text segment and to
+//  declare the global names.
+//
+//***************************************************
 
-  if (cgen_debug) cout << "coding constants" << endl;
-  code_constants();
-
-  if (cgen_debug) cout << "coding class_nameTab" << endl;
-  code_class_nametab();
-
-  if (cgen_debug) cout << "coding dispatch tables" << endl;
-  code_dispatch_tables();
-
-  if (cgen_debug) cout << "coding prototype objects" << endl;
-  code_prototype_objects();
-
-  if (cgen_debug) cout << "coding global text" << endl;
-  code_global_text();
-
-  if (cgen_debug) cout << "coding object initializers" << endl;
-  code_object_init();
-
-  if (cgen_debug) cout << "coding class methods" << endl;
-  code_methods();
+void CgenClassTable::code_global_text()
+{
+  str << GLOBAL << HEAP_START << endl
+      << HEAP_START << LABEL 
+      << WORD << 0 << endl
+      << "\t.text" << endl
+      << GLOBAL;
+  emit_init_ref(idtable.add_string("Main"), str);
+  str << endl << GLOBAL;
+  emit_init_ref(idtable.add_string("Int"),str);
+  str << endl << GLOBAL;
+  emit_init_ref(idtable.add_string("String"),str);
+  str << endl << GLOBAL;
+  emit_init_ref(idtable.add_string("Bool"),str);
+  str << endl << GLOBAL;
+  emit_method_ref(idtable.add_string("Main"), idtable.add_string("main"), str);
+  str << endl;
 }
 
 CgenClassTableEntryP CgenClassTable::root()
@@ -964,16 +934,19 @@ void CgenClassTableEntry::code_class_nametab(ostream& str)
     l->hd()->code_class_nametab(str);
 }
 
-void CgenClassTableEntry::code_dispatch_table(ostream& str)
+void CgenClassTableEntry::code_dispatch_table(ostream& s)
 {
-  emit_disptable_ref(node->get_name(), str); str << LABEL;
+  emit_disptable_ref(node->get_name(), s); s << LABEL;
 
   for (int offset = 0; offset < next_method_offset; offset++) {
     Symbol method_name = method_name_table.lookup(offset);
     MethodBinding *method_binding = method_table.lookup(method_name);
 
-    str << WORD; method_binding->code_ref(str); str << endl;
+    s << WORD; method_binding->code_ref(s); s << endl;
   }
+
+  for (List<CgenClassTableEntry> *l = children; l; l = l->tl())
+    l->hd()->code_dispatch_table(s);
 }
 
 void CgenClassTableEntry::code_prototype_object(ostream &s)
@@ -1003,12 +976,18 @@ void CgenClassTableEntry::code_prototype_object(ostream &s)
 
     s << endl;
   }
+
+  for (List<CgenClassTableEntry> *l = children; l; l = l->tl())
+    l->hd()->code_prototype_object(s);
 }
 
 void CgenClassTableEntry::code_init(ostream &s)
 {
   emit_init_ref(node->get_name(), s); s << LABEL;
   emit_return(s);
+
+  for (List<CgenClassTableEntry> *l = children; l; l = l->tl())
+    l->hd()->code_init(s);
 }
 
 void CgenClassTableEntry::add_attr(Symbol name, Symbol type)
@@ -1028,10 +1007,14 @@ void CgenClassTableEntry::add_method(Symbol method_name)
 
 void CgenClassTableEntry::code_methods(ostream &s)
 {
-  Features features = node->get_features();
+  if (!is_basic()) {
+    Features features = node->get_features();
+    for (int i = features->first(); features->more(i); i = features->next(i))
+      features->nth(i)->code_method(s, env);
+  }
 
-  for (int i = features->first(); features->more(i); i = features->next(i))
-    features->nth(i)->code_method(s, env);
+  for (List<CgenClassTableEntry> *l = children; l; l = l->tl())
+    l->hd()->code_methods(s);
 }
 
 ///////////////////////////////////////////////////////////////////////
@@ -1081,9 +1064,23 @@ void method_class::add_feature(CgenClassTableEntry *entry)
   entry->add_method(this->name);
 }
 
-void method_class::code_method(ostream &s, CgenEnvironment *)
+void method_class::code_method(ostream &s, CgenEnvironment *env)
 {
+  // TODO: replace with real class name
   emit_method_ref(Main, name, s); s << LABEL;
+
+  emit_addiu(SP, SP, -FRAME_SIZE, s);
+  emit_store(FP, FP_OFFSET, SP, s);
+  emit_store(SELF, SELF_OFFSET, SP, s);
+  emit_store(RA, RA_OFFSET, SP, s);
+  
+  expr->code(s, env);
+
+  emit_load(RA, RA_OFFSET, SP, s);
+  emit_load(SELF, SELF_OFFSET, SP, s);
+  emit_load(FP, FP_OFFSET, SP, s);
+  emit_addiu(SP, SP, FRAME_SIZE + formals->len() * WORD_SIZE, s);
+
   emit_return(s);
 }
 
@@ -1105,8 +1102,17 @@ void static_dispatch_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void dispatch_class::code(ostream&, CgenEnvironment *)
+void dispatch_class::code(ostream& s, CgenEnvironment *env)
 {
+  for (int i = actual->first(); actual->more(i); i = actual->next(i)) {
+    actual->nth(i)->code(s, env);
+    emit_push(ACC, s);
+  }
+
+  expr->code(s, env);
+
+  // TODO: replace with real class name
+  s << JAL; emit_method_ref(IO, name, s); s << endl;
 }
 
 void cond_class::code(ostream&, CgenEnvironment *)
@@ -1195,8 +1201,8 @@ void no_expr_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void object_class::code(ostream&, CgenEnvironment *)
+void object_class::code(ostream& s, CgenEnvironment *)
 {
+  // TODO: support real vars
+  emit_move(ACC, SELF, s);
 }
-
-
