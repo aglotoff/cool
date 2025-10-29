@@ -77,12 +77,14 @@ typedef Cases_class *Cases;
 #define Feature_EXTRAS \
   virtual Symbol get_name() = 0; \
   virtual void add_feature(CgenClassTableEntry *) = 0; \
+  virtual void code_init(ostream&, CgenEnvironment *) = 0; \
   virtual void code_method(ostream&, CgenEnvironment *) = 0; \
   virtual void dump_with_types(ostream&, int) = 0; 
 
 #define Feature_SHARED_EXTRAS \
   Symbol get_name() { return name; } \
   void add_feature(CgenClassTableEntry *); \
+  void code_init(ostream&, CgenEnvironment *); \
   void code_method(ostream&, CgenEnvironment *); \
   void dump_with_types(ostream&, int);    
 

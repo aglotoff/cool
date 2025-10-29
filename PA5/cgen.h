@@ -14,7 +14,8 @@ typedef CgenClassTable *CgenClassTableP;
 class CgenClassTableEntry;
 typedef CgenClassTableEntry *CgenClassTableEntryP;
 
-class CgenEnvironment {};
+class CgenEnvironment;
+typedef CgenEnvironment *CgenEnvironmentP;
 
 class MethodBinding {
 private:
@@ -26,13 +27,32 @@ public:
    void code_ref(ostream &);
 };
 
-class AttrBinding {
+class VarBinding {
 public:
+   virtual Symbol get_type() = 0;
+   virtual void code_ref(ostream &) = 0;
+   virtual void code_update(ostream &) = 0;
+};
+
+class AttributeBinding : public VarBinding {
+private:
    Symbol name;
-   Symbol type;
+   attr_class *tree_node;
+   int offset;
 
 public:
-   AttrBinding(Symbol, Symbol);
+   AttributeBinding(Symbol, attr_class *, int);
+
+   Symbol get_type();
+   void code_ref(ostream &);
+   void code_update(ostream &);
+};
+
+class SelfBinding : public VarBinding {
+public:
+   Symbol get_type();
+   void code_ref(ostream &);
+   void code_update(ostream &);
 };
 
 class CgenClassTable {
@@ -95,7 +115,7 @@ private:
    int next_method_offset;
 
    SymbolTable<int, Entry> attr_name_table;
-   SymbolTable<Symbol, AttrBinding> attr_table;
+   SymbolTable<Symbol, VarBinding> var_table;
    int next_attr_offset;
 
 public:
@@ -111,16 +131,30 @@ public:
    void set_parent(CgenClassTableEntryP);
 
    void init(int, SymbolTable<int, Entry>, SymbolTable<Symbol, MethodBinding>,
-      int, SymbolTable<int, Entry>, SymbolTable<Symbol, AttrBinding>);
+      int, SymbolTable<int, Entry>, SymbolTable<Symbol, VarBinding>);
 
    void add_method(Symbol);
-   void add_attr(Symbol, Symbol);
+   void add_attribute(Symbol, attr_class *);
 
    void code_class_nametab(ostream&);
    void code_dispatch_table(ostream&);
    void code_prototype_object(ostream&);
    void code_init(ostream&);
    void code_methods(ostream&);
+
+   VarBinding *lookup_var(Symbol name)
+   { return var_table.lookup(name ); }
+};
+
+class CgenEnvironment {
+public:
+   CgenClassTableEntry *entry;
+   CgenEnvironment(CgenClassTableEntry *e)
+   : entry(e)
+   {}
+
+   VarBinding *lookup_var(Symbol name)
+   { return entry->lookup_var(name); }
 };
 
 class BoolConst 

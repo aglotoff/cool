@@ -351,6 +351,30 @@ static void emit_gc_check(char *source, ostream &s)
   s << JAL << "_gc_check" << endl;
 }
 
+static void emit_function_prologue(ostream &s)
+{
+  emit_addiu(SP, SP, -FRAME_SIZE, s);
+
+  emit_store(FP, FP_OFFSET, SP, s);
+  emit_store(SELF, SELF_OFFSET, SP, s);
+  emit_store(RA, RA_OFFSET, SP, s);
+
+  emit_addiu(FP, SP, 4, s);
+
+  emit_move(SELF, ACC, s);
+}
+
+static void emit_function_epilogue(int formals_len, ostream &s)
+{
+  emit_load(RA, RA_OFFSET, SP, s);
+  emit_load(SELF, SELF_OFFSET, SP, s);
+  emit_load(FP, FP_OFFSET, SP, s);
+
+  emit_addiu(SP, SP, FRAME_SIZE + formals_len * WORD_SIZE, s);
+
+  emit_return(s);
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 //
 // coding strings, ints, and booleans
@@ -508,7 +532,7 @@ CgenClassTable::CgenClassTable(Classes classes, ostream& s)
     SymbolTable<Symbol, MethodBinding>(),
     0,
     SymbolTable<int, Entry>(),
-    SymbolTable<Symbol, AttrBinding>()
+    SymbolTable<Symbol, VarBinding>()
   );
 
   string_class_tag = table->probe(Str)->get_tag();
@@ -896,9 +920,11 @@ void CgenClassTableEntry::init(
   SymbolTable<Symbol, MethodBinding> mt,
   int nao,
   SymbolTable<int, Entry> ant,
-  SymbolTable<Symbol, AttrBinding> at)
+  SymbolTable<Symbol, VarBinding> at)
 {
   tag = class_table->assign_class_tag(node->get_name());
+
+  env = new CgenEnvironment(this);
 
   next_method_offset = nmo;
   method_name_table = mnt;
@@ -906,13 +932,15 @@ void CgenClassTableEntry::init(
 
   next_attr_offset = nao;
   attr_name_table = ant;
-  attr_table = at;
+  var_table = at;
 
   method_name_table.enterscope();
   method_table.enterscope();
 
   attr_name_table.enterscope();
-  attr_table.enterscope();
+  var_table.enterscope();
+
+  var_table.addid(self, new SelfBinding());
 
   Features features = node->get_features();
 
@@ -921,7 +949,7 @@ void CgenClassTableEntry::init(
 
   for (List<CgenClassTableEntry> *l = children; l; l = l->tl())
     l->hd()->init(next_method_offset, method_name_table, method_table,
-      next_attr_offset, attr_name_table, attr_table);
+      next_attr_offset, attr_name_table, var_table);
 }
 
 void CgenClassTableEntry::code_class_nametab(ostream& str)
@@ -961,15 +989,15 @@ void CgenClassTableEntry::code_prototype_object(ostream &s)
 
   for (int i = 0; i < next_attr_offset; i++) {
     Symbol attr_name = attr_name_table.lookup(i);
-    AttrBinding *attr_binding = attr_table.lookup(attr_name);
+    Symbol attr_type = var_table.lookup(attr_name)->get_type();
 
     s << WORD;
 
-    if (attr_binding->type == Int)
+    if (attr_type == Int)
       inttable.lookup_string("0")->code_ref(s);
-    else if (attr_binding->type == Str)
+    else if (attr_type == Str)
       stringtable.lookup_string("")->code_ref(s);
-    else if (attr_binding->type == Bool)
+    else if (attr_type == Bool)
       falsebool.code_ref(s);
     else
       s << "0";
@@ -984,16 +1012,31 @@ void CgenClassTableEntry::code_prototype_object(ostream &s)
 void CgenClassTableEntry::code_init(ostream &s)
 {
   emit_init_ref(node->get_name(), s); s << LABEL;
-  emit_return(s);
+
+  emit_function_prologue(s);
+
+  if (node->get_parent() != No_class) {
+    s << JAL; emit_init_ref(parent->node->get_name(), s); s << endl;
+  }
+
+  Features features = node->get_features();
+  for (int i = features->first(); features->more(i); i = features->next(i))
+    features->nth(i)->code_init(s, env);
+
+  emit_move(ACC, SELF, s);
+
+  emit_function_epilogue(0, s);
 
   for (List<CgenClassTableEntry> *l = children; l; l = l->tl())
     l->hd()->code_init(s);
 }
 
-void CgenClassTableEntry::add_attr(Symbol name, Symbol type)
+void CgenClassTableEntry::add_attribute(Symbol name, attr_class *tree_node)
 {
-  attr_name_table.addid(next_attr_offset++, name);
-  attr_table.addid(name, new AttrBinding(name, type));
+  attr_name_table.addid(next_attr_offset, name);
+  var_table.addid(name, new AttributeBinding(name, tree_node, next_attr_offset));
+
+  next_attr_offset++;
 }
 
 void CgenClassTableEntry::add_method(Symbol method_name)
@@ -1023,10 +1066,40 @@ void CgenClassTableEntry::code_methods(ostream &s)
 //
 ///////////////////////////////////////////////////////////////////////
 
-AttrBinding::AttrBinding(Symbol n, Symbol t)
+AttributeBinding::AttributeBinding(Symbol n, attr_class *tn, int o)
 : name(n),
-  type(t)
+  tree_node(tn),
+  offset(o)
 {}
+
+Symbol AttributeBinding::get_type()
+{
+  return tree_node->type_decl;
+}
+
+void AttributeBinding::code_ref(ostream &s)
+{
+  emit_load(ACC, DEFAULT_OBJFIELDS + offset, SELF, s);
+}
+
+void AttributeBinding::code_update(ostream &s)
+{
+  emit_store(ACC, DEFAULT_OBJFIELDS + offset, SELF, s);
+}
+
+Symbol SelfBinding::get_type()
+{
+  return SELF_TYPE;
+}
+
+void SelfBinding::code_ref(ostream &s)
+{
+  emit_move(ACC, SELF, s);
+}
+
+void SelfBinding::code_update(ostream &s)
+{
+}
 
 ///////////////////////////////////////////////////////////////////////
 //
@@ -1052,36 +1125,35 @@ void MethodBinding::code_ref(ostream &s)
 
 void attr_class::add_feature(CgenClassTableEntry *entry)
 {
-  entry->add_attr(this->name, this->type_decl);
+  entry->add_attribute(this->name, this);
+}
+
+void attr_class::code_init(ostream &s, CgenEnvironment *env)
+{
+  if (init->type) {
+    init->code(s, env);
+    env->lookup_var(name)->code_update(s);
+  }
 }
 
 void attr_class::code_method(ostream &, CgenEnvironment *)
-{
-}
+{}
 
 void method_class::add_feature(CgenClassTableEntry *entry)
 {
   entry->add_method(this->name);
 }
 
+void method_class::code_init(ostream &, CgenEnvironment *)
+{}
+
 void method_class::code_method(ostream &s, CgenEnvironment *env)
 {
   // TODO: replace with real class name
   emit_method_ref(Main, name, s); s << LABEL;
-
-  emit_addiu(SP, SP, -FRAME_SIZE, s);
-  emit_store(FP, FP_OFFSET, SP, s);
-  emit_store(SELF, SELF_OFFSET, SP, s);
-  emit_store(RA, RA_OFFSET, SP, s);
-  
+  emit_function_prologue(s);
   expr->code(s, env);
-
-  emit_load(RA, RA_OFFSET, SP, s);
-  emit_load(SELF, SELF_OFFSET, SP, s);
-  emit_load(FP, FP_OFFSET, SP, s);
-  emit_addiu(SP, SP, FRAME_SIZE + formals->len() * WORD_SIZE, s);
-
-  emit_return(s);
+  emit_function_epilogue(formals->len(), s);
 }
 
 //******************************************************************
@@ -1201,8 +1273,7 @@ void no_expr_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void object_class::code(ostream& s, CgenEnvironment *)
+void object_class::code(ostream& s, CgenEnvironment *env)
 {
-  // TODO: support real vars
-  emit_move(ACC, SELF, s);
+  env->lookup_var(name)->code_ref(s);
 }
