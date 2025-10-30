@@ -30,28 +30,27 @@ public:
 class VarBinding {
 public:
    virtual Symbol get_type() = 0;
-   virtual void code_ref(ostream &) = 0;
+   virtual void code_read(ostream &) = 0;
    virtual void code_update(ostream &) = 0;
 };
 
 class AttributeBinding : public VarBinding {
 private:
-   Symbol name;
-   attr_class *tree_node;
+   Symbol type;
    int offset;
 
 public:
-   AttributeBinding(Symbol, attr_class *, int);
+   AttributeBinding(Symbol, int);
 
    Symbol get_type();
-   void code_ref(ostream &);
+   void code_read(ostream &);
    void code_update(ostream &);
 };
 
 class SelfBinding : public VarBinding {
 public:
    Symbol get_type();
-   void code_ref(ostream &);
+   void code_read(ostream &);
    void code_update(ostream &);
 };
 
@@ -60,7 +59,7 @@ private:
    List<CgenClassTableEntry> *list;
    SymbolTable<Symbol, CgenClassTableEntry> *table;
 
-   ostream& str;
+   ostream& out;
 
    int next_class_tag;
    int string_class_tag;
@@ -99,7 +98,7 @@ public:
 
 class CgenClassTableEntry {
 private:
-   Class_ node;
+   Class_ tree_node;
    CgenClassTableEntryP parent;                        // Parent of class
    List<CgenClassTableEntry> *children;                  // Children of class
    Basicness basic_status;                    // `Basic' if class is basic
@@ -121,7 +120,7 @@ private:
 public:
    CgenClassTableEntry(Class_, Basicness, CgenClassTable *);
 
-   Class_ get_node() { return node; };
+   Class_ get_node() { return tree_node; };
    CgenClassTableEntryP get_parent() { return parent; }
    List<CgenClassTableEntry> *get_children() { return children; }
    int get_tag() const { return tag; }
@@ -134,7 +133,7 @@ public:
       int, SymbolTable<int, Entry>, SymbolTable<Symbol, VarBinding>);
 
    void add_method(Symbol);
-   void add_attribute(Symbol, attr_class *);
+   void add_attribute(Symbol, Symbol);
 
    void code_class_nametab(ostream&);
    void code_dispatch_table(ostream&);
@@ -144,6 +143,8 @@ public:
 
    VarBinding *lookup_var(Symbol name)
    { return var_table.lookup(name ); }
+
+   int lookup_method(Symbol name);
 };
 
 class CgenEnvironment {
@@ -155,6 +156,9 @@ public:
 
    VarBinding *lookup_var(Symbol name)
    { return entry->lookup_var(name); }
+
+   int lookup_method(Symbol name)
+   { return entry->lookup_method(name); }
 };
 
 class BoolConst 
