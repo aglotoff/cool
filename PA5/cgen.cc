@@ -87,10 +87,10 @@ static char *gc_init_names[] =
 static char *gc_collect_names[] =
   { "_NoGC_Collect", "_GenGC_Collect", "_ScnGC_Collect" };
 
-//  BoolConst is a class that implements code generation for operations
-//  on the two booleans, which are given global names here.
-BoolConst falsebool(FALSE);
-BoolConst truebool(TRUE);
+// BoolConst is a class that implements code generation for operations
+// on the two booleans, which are given global names here.
+BoolConst false_bool(FALSE);
+BoolConst true_bool(TRUE);
 
 ///////////////////////////////////////////////////////////////////////////////
 //
@@ -378,30 +378,33 @@ static void emit_gc_check(char *source, ostream &out)
 //
 static void emit_function_prologue(ostream &out)
 {
-  emit_addiu(SP, SP, -FRAME_SIZE, out);   // allocate room for the stack frame
+  // allocate room for the stack frame
+  emit_addiu(SP, SP, -FRAME_SIZE, out);
 
-  emit_store(FP, FP_OFFSET, SP, out);     // save caller's frame pointer
+  emit_store(FP, FP_OFFSET, SP, out); // save caller's frame pointer
   emit_store(SELF, SELF_OFFSET, SP, out); // save caller's self
-  emit_store(RA, RA_OFFSET, SP, out);     // save return address
+  emit_store(RA, RA_OFFSET, SP, out); // save return address
 
-  emit_addiu(FP, SP, 4, out);             // setup new frame pointer
+  // setup new frame pointer
+  emit_addiu(FP, SP, 4, out);
 
-  emit_move(SELF, ACC, out);              // set $s0 to point to self
+  // set $s0 to point to self
+  emit_move(SELF, ACC, out);
 }
 
 //
 // Restore stack frame, pop the arguments, and return
 //
-static void emit_function_epilogue(int formals_len, ostream &out)
+static void emit_function_epilogue(int formal_count, ostream &out)
 {
-  emit_load(RA, RA_OFFSET, SP, out);      // restore return address
-  emit_load(SELF, SELF_OFFSET, SP, out);  // restore caller's self
-  emit_load(FP, FP_OFFSET, SP, out);      // restore caller's frame pointer
+  emit_load(RA, RA_OFFSET, SP, out); // restore return address
+  emit_load(SELF, SELF_OFFSET, SP, out); // restore caller's self
+  emit_load(FP, FP_OFFSET, SP, out); // restore caller's frame pointer
 
-  // Pop the stack frame and the arguments
-  emit_addiu(SP, SP, FRAME_SIZE + formals_len * WORD_SIZE, out);
+  // pop the stack frame and the arguments
+  emit_addiu(SP, SP, FRAME_SIZE + formal_count * WORD_SIZE, out);
 
-  // Return to the caller
+  // return to the caller
   emit_return(out);
 }
 
@@ -445,17 +448,18 @@ void StringEntry::code_def(ostream& out, int string_class_tag)
   // Add -1 eye catcher
   out << WORD << "-1" << endl;
 
-  code_ref(out); out << LABEL;                  // label
-  out << WORD << string_class_tag << endl;      // class tag
-  out << WORD << object_size << endl;           // object size
+  code_ref(out); out << LABEL; // label
+  out << WORD << string_class_tag << endl; // class tag
+  out << WORD << object_size << endl; // object size
   
   // dispatch table
   out << WORD; emit_disptable_ref(Str, out); out << endl;   
-                     
-  out << WORD; len_sym->code_ref(out); out << endl;   // string length
-  emit_string_constant(out, str);                     // ascii string
 
-  out << ALIGN;                                       // align to word
+  out << WORD; len_sym->code_ref(out); out << endl; // string length
+  emit_string_constant(out, str); // ascii string
+
+  // align to word
+  out << ALIGN;
 }
 
 //
@@ -485,14 +489,15 @@ void IntEntry::code_def(ostream &out, int int_class_tag)
   // Add -1 eye catcher
   out << WORD << "-1" << endl;
 
-  code_ref(out); out << LABEL;                              // label
-  out << WORD << int_class_tag << endl;                     // class tag
-  out << WORD << (DEFAULT_OBJFIELDS + INT_SLOTS) << endl;   // object size
+  code_ref(out); out << LABEL; // label
+  out << WORD << int_class_tag << endl; // class tag
+  out << WORD << (DEFAULT_OBJFIELDS + INT_SLOTS) << endl; // object size
 
   // dispatch table
   out << WORD; emit_disptable_ref(Int, out); out << endl;   
 
-  out << WORD << str << endl;     // integer value
+  // integer value
+  out << WORD << str << endl;
 }
 
 //
@@ -519,20 +524,20 @@ void BoolConst::code_ref(ostream& out) const
 //
 // Emit code for a constant Bool.
 //
-
-void BoolConst::code_def(ostream& s, int boolclasstag)
+void BoolConst::code_def(ostream& s, int bool_class_tag)
 {
   // Add -1 eye catcher
   s << WORD << "-1" << endl;
 
-  code_ref(s); s << LABEL;                                 // label
-  s << WORD << boolclasstag << endl;                       // class tag
-  s << WORD << (DEFAULT_OBJFIELDS + BOOL_SLOTS) << endl;   // object size
+  code_ref(s); s << LABEL; // label
+  s << WORD << bool_class_tag << endl; // class tag
+  s << WORD << (DEFAULT_OBJFIELDS + BOOL_SLOTS) << endl; // object size
 
   // dispatch table
   s << WORD; emit_disptable_ref(Bool, s); s << endl;   
 
-  s << WORD << val << endl;                             // value (0 or 1)
+  // value (0 or 1)
+  s << WORD << val << endl;
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -594,6 +599,7 @@ void CgenClassTable::install_basic_classes()
         filename),
 			Basic,
       this));
+
   table->addid(SELF_TYPE,
 	  new CgenClassTableEntry(
       class_(SELF_TYPE,
@@ -602,6 +608,7 @@ void CgenClassTable::install_basic_classes()
         filename),
 			Basic,
       this));
+
   table->addid(prim_slot,
 	  new CgenClassTableEntry(
       class_(prim_slot,
@@ -727,7 +734,7 @@ void CgenClassTable::install_classes(Classes cs)
 
 void CgenClassTable::install_class(CgenClassTableEntryP entry)
 {
-  Symbol name = entry->get_node()->get_name();
+  Symbol name = entry->get_name();
 
   if (table->probe(name))
     return;
@@ -741,12 +748,10 @@ void CgenClassTable::install_class(CgenClassTableEntryP entry)
 void CgenClassTable::build_inheritance_tree()
 {
   for (List<CgenClassTableEntry> *l = list; l; l = l->tl()) {
-    Class_ node = l->hd()->get_node();
-    
-    CgenClassTableEntry *entry = table->probe(node->get_name());
-    CgenClassTableEntry *parent_entry = table->probe(node->get_parent());
+    CgenClassTableEntry *entry = l->hd();
+    CgenClassTableEntry *parent_entry = table->probe(entry->get_parent_name());
 
-    if (entry && parent_entry) {
+    if (parent_entry) {
       entry->set_parent(parent_entry);
       parent_entry->add_child(entry);
     }
@@ -812,8 +817,8 @@ void CgenClassTable::code_global_data()
   out << GLOBAL; emit_protobj_ref(main, out); out << endl;
   out << GLOBAL; emit_protobj_ref(integer, out); out << endl;
   out << GLOBAL; emit_protobj_ref(string, out); out << endl;
-  out << GLOBAL; falsebool.code_ref(out); out << endl;
-  out << GLOBAL; truebool.code_ref(out); out << endl;
+  out << GLOBAL; false_bool.code_ref(out); out << endl;
+  out << GLOBAL; true_bool.code_ref(out); out << endl;
   out << GLOBAL << INTTAG << endl;
   out << GLOBAL << BOOLTAG << endl;
   out << GLOBAL << STRINGTAG << endl;
@@ -874,8 +879,8 @@ void CgenClassTable::code_constants()
 
 void CgenClassTable::code_bools(int bool_class_tag)
 {
-  falsebool.code_def(out, bool_class_tag);
-  truebool.code_def(out, bool_class_tag);
+  false_bool.code_def(out, bool_class_tag);
+  true_bool.code_def(out, bool_class_tag);
 }
 
 void CgenClassTable::code_class_nametab()
@@ -923,16 +928,14 @@ CgenClassTableEntryP CgenClassTable::root()
 
 CgenClassTableEntry::CgenClassTableEntry(Class_ t, Basicness bstatus, CgenClassTable *ct)
 : tree_node(t),
-  parent(NULL),
-  children(NULL),
   basic_status(bstatus),
   tag(-1),
   class_table(ct)
 {}
 
-void CgenClassTableEntry::add_child(CgenClassTableEntryP n)
+void CgenClassTableEntry::add_child(CgenClassTableEntryP entry)
 {
-  children = new List<CgenClassTableEntry>(n, children);
+  children = new List<CgenClassTableEntry>(entry, children);
 }
 
 void CgenClassTableEntry::set_parent(CgenClassTableEntryP p)
@@ -950,15 +953,15 @@ void CgenClassTableEntry::init(
   SymbolTable<int, Entry> ant,
   SymbolTable<Symbol, VarBinding> at)
 {
-  tag = class_table->assign_class_tag(tree_node->get_name());
+  tag = class_table->assign_class_tag(get_name());
 
   env = new CgenEnvironment(this);
 
-  next_method_offset = nmo;
+  dispatch_table_len = nmo;
   method_name_table = mnt;
   method_table = mt;
 
-  next_attr_offset = nao;
+  attribute_count = nao;
   attr_name_table = ant;
   var_table = at;
 
@@ -976,13 +979,13 @@ void CgenClassTableEntry::init(
     features->nth(i)->add_feature(this);
 
   for (List<CgenClassTableEntry> *l = children; l; l = l->tl())
-    l->hd()->init(next_method_offset, method_name_table, method_table,
-      next_attr_offset, attr_name_table, var_table);
+    l->hd()->init(dispatch_table_len, method_name_table, method_table,
+      attribute_count, attr_name_table, var_table);
 }
 
 void CgenClassTableEntry::code_class_nametab(ostream& out)
 {
-  StringEntry *s = stringtable.lookup_string(tree_node->get_name()->get_string());
+  StringEntry *s = stringtable.lookup_string(get_name()->get_string());
 
   out << WORD; s->code_ref(out); out << endl;
 
@@ -992,9 +995,9 @@ void CgenClassTableEntry::code_class_nametab(ostream& out)
 
 void CgenClassTableEntry::code_dispatch_table(ostream& out)
 {
-  emit_disptable_ref(tree_node->get_name(), out); out << LABEL;
+  emit_disptable_ref(get_name(), out); out << LABEL;
 
-  for (int offset = 0; offset < next_method_offset; offset++) {
+  for (int offset = 0; offset < dispatch_table_len; offset++) {
     Symbol method_name = method_name_table.lookup(offset);
     assert(method_name);
     MethodBinding *method_binding = method_table.lookup(method_name);
@@ -1012,25 +1015,28 @@ void CgenClassTableEntry::code_prototype_object(ostream &out)
   // Add -1 eye catcher
   out << WORD << "-1" << endl;
 
-  Symbol class_name = tree_node->get_name();
+  emit_protobj_ref(get_name(), out); out << LABEL; // label
+  out << WORD << tag << endl; // tag
+  out << WORD << DEFAULT_OBJFIELDS + attribute_count << endl; // size
 
-  emit_protobj_ref(class_name, out); out << LABEL;                // label
-  out << WORD << tag << endl;                                   // tag
-  out << WORD << DEFAULT_OBJFIELDS + next_attr_offset << endl;  // size
-  out << WORD; emit_disptable_ref(class_name, out); out << endl;
+  // dispatch table
+  out << WORD; emit_disptable_ref(get_name(), out); out << endl;
 
-  for (int i = 0; i < next_attr_offset; i++) {
+  // attributes
+  for (int i = 0; i < attribute_count; i++) {
     Symbol attr_name = attr_name_table.lookup(i);
-    Symbol attr_type = var_table.lookup(attr_name)->get_type();
+    assert(attr_name);
+    VarBinding *attr_binding = var_table.lookup(attr_name);
+    assert(attr_binding);
 
     out << WORD;
 
-    if (attr_type == Int)
+    if (attr_binding->get_type() == Int)
       inttable.lookup_string("0")->code_ref(out);
-    else if (attr_type == Str)
+    else if (attr_binding->get_type() == Str)
       stringtable.lookup_string("")->code_ref(out);
-    else if (attr_type == Bool)
-      falsebool.code_ref(out);
+    else if (attr_binding->get_type() == Bool)
+      false_bool.code_ref(out);
     else
       out << "0";
 
@@ -1043,21 +1049,23 @@ void CgenClassTableEntry::code_prototype_object(ostream &out)
 
 void CgenClassTableEntry::code_init(ostream &out)
 {
-  emit_init_ref(tree_node->get_name(), out); out << LABEL;
+  emit_init_ref(get_name(), out); out << LABEL;
 
   emit_function_prologue(out);
 
-  if (tree_node->get_parent() != No_class) {
+  if (get_parent_name() != No_class) {
+    // initialize parent
     assert(parent);
-    out << JAL; emit_init_ref(parent->tree_node->get_name(), out); out << endl;
+    out << JAL; emit_init_ref(get_parent_name(), out); out << endl;
   }
 
+  // initialize attributes
   Features features = tree_node->get_features();
   for (int i = features->first(); features->more(i); i = features->next(i))
     features->nth(i)->code_init(out, env);
 
+  // return self
   emit_move(ACC, SELF, out);
-
   emit_function_epilogue(0, out);
 
   for (List<CgenClassTableEntry> *l = children; l; l = l->tl())
@@ -1066,19 +1074,15 @@ void CgenClassTableEntry::code_init(ostream &out)
 
 void CgenClassTableEntry::add_attribute(Symbol name, Symbol type)
 {
-  attr_name_table.addid(next_attr_offset, name);
-  var_table.addid(name, new AttributeBinding(type, next_attr_offset));
-
-  next_attr_offset++;
+  attr_name_table.addid(attribute_count, name);
+  var_table.addid(name, new AttributeBinding(type, attribute_count++));
 }
 
-void CgenClassTableEntry::add_method(Symbol method_name)
+void CgenClassTableEntry::add_method(Symbol name)
 {
-  if (!method_table.lookup(method_name))
-    method_name_table.addid(next_method_offset++, method_name);
-
-  method_table.addid(method_name,
-    new MethodBinding(tree_node->get_name(), method_name));
+  if (!method_table.lookup(name))
+    method_name_table.addid(dispatch_table_len++, name);
+  method_table.addid(name, new MethodBinding(get_name(), name));
 }
 
 void CgenClassTableEntry::code_methods(ostream &out)
@@ -1095,7 +1099,7 @@ void CgenClassTableEntry::code_methods(ostream &out)
 
 int CgenClassTableEntry::lookup_method(Symbol name)
 {
-  for (int offset = 0; offset < next_method_offset; offset++)
+  for (int offset = 0; offset < dispatch_table_len; offset++)
     if (method_name_table.lookup(offset) == name)
       return offset;
   return -1;

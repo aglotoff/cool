@@ -111,18 +111,19 @@ private:
 
    SymbolTable<int, Entry> method_name_table;
    SymbolTable<Symbol, MethodBinding> method_table;
-   int next_method_offset;
+   int dispatch_table_len;
 
    SymbolTable<int, Entry> attr_name_table;
    SymbolTable<Symbol, VarBinding> var_table;
-   int next_attr_offset;
+   int attribute_count;
 
 public:
    CgenClassTableEntry(Class_, Basicness, CgenClassTable *);
 
-   Class_ get_node() { return tree_node; };
    CgenClassTableEntryP get_parent() { return parent; }
    List<CgenClassTableEntry> *get_children() { return children; }
+   Symbol get_name() { return tree_node->get_name(); }
+   Symbol get_parent_name() { return tree_node->get_parent(); }
    int get_tag() const { return tag; }
    int is_basic() { return (basic_status == Basic); }
 
