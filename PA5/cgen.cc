@@ -1105,6 +1105,8 @@ int CgenClassTableEntry::lookup_method(Symbol name)
   return -1;
 }
 
+int CgenEnvironment::next_label = 0;
+
 ///////////////////////////////////////////////////////////////////////
 //
 // AttributeBinding methods
@@ -1235,6 +1237,18 @@ void dispatch_class::code(ostream& out, CgenEnvironment *env)
   }
 
   expr->code(out, env);
+
+  int label = env->get_next_label();
+
+  emit_bne(ACC, ZERO, label, out);
+
+  // abort dispatch
+  StringEntry *filename = stringtable.lookup_string(env->get_file_name());
+  emit_load_string(ACC, filename, out); // filename in $a0
+  emit_load_imm(T1, get_line_number(), out); // line number in $t1
+  emit_jal("_dispatch_abort", out);
+
+  emit_label_def(label, out);
 
   int offset = env->lookup_method(name);
 

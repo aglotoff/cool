@@ -124,6 +124,7 @@ public:
    List<CgenClassTableEntry> *get_children() { return children; }
    Symbol get_name() { return tree_node->get_name(); }
    Symbol get_parent_name() { return tree_node->get_parent(); }
+   Symbol get_file_name() { return tree_node->get_filename(); }
    int get_tag() const { return tag; }
    int is_basic() { return (basic_status == Basic); }
 
@@ -149,11 +150,17 @@ public:
 };
 
 class CgenEnvironment {
+private:
+   static int next_label;
+
 public:
    CgenClassTableEntry *entry;
    CgenEnvironment(CgenClassTableEntry *e)
    : entry(e)
    {}
+
+   int get_next_label() { return next_label++; }
+   char *get_file_name() { return entry->get_file_name()->get_string(); }
 
    VarBinding *lookup_var(Symbol name)
    { return entry->lookup_var(name); }
