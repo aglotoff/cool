@@ -955,7 +955,7 @@ void CgenClassTableEntry::init(
 {
   tag = class_table->assign_class_tag(get_name());
 
-  env = new CgenEnvironment(this);
+  env = new CgenEnvironment(this, class_table);
 
   dispatch_table_len = nmo;
   method_name_table = mnt;
@@ -1105,7 +1105,29 @@ int CgenClassTableEntry::lookup_method(Symbol name)
   return -1;
 }
 
+int CgenClassTableEntry::lookup_method(Symbol class_name, Symbol method_name)
+{
+  CgenClassTableEntry *entry = class_table->lookup(class_name);
+  assert(entry);
+  return entry->lookup_method(method_name);
+}
+
 int CgenEnvironment::next_label = 0;
+
+VarBinding *CgenEnvironment::lookup_var(Symbol name)
+{
+  return entry->lookup_var(name);
+}
+
+int CgenEnvironment::lookup_method(Symbol class_name, Symbol method_name)
+{
+  if (class_name == SELF_TYPE)
+    return entry->lookup_method(method_name);
+
+  CgenClassTableEntryP e = table->lookup(class_name);
+  assert(e);
+  return e->lookup_method(method_name);
+}
 
 ///////////////////////////////////////////////////////////////////////
 //
@@ -1250,9 +1272,9 @@ void dispatch_class::code(ostream& out, CgenEnvironment *env)
 
   emit_label_def(label, out);
 
-  int offset = env->lookup_method(name);
+  int offset = env->lookup_method(expr->get_type(), name);
 
-  emit_load(T1, DISPTABLE_OFFSET, SELF, out);
+  emit_load(T1, DISPTABLE_OFFSET, ACC, out);
   emit_load(T1, offset, T1, out);
   emit_jalr(T1, out);
 
@@ -1336,8 +1358,15 @@ void bool_const_class::code(ostream& out, CgenEnvironment *)
   emit_load_bool(ACC, BoolConst(val), out);
 }
 
-void new__class::code(ostream&, CgenEnvironment *)
+void new__class::code(ostream& out, CgenEnvironment *env)
 {
+  emit_partial_load_address(ACC, out);
+  emit_protobj_ref(type_name, out);
+  out << endl;
+
+  emit_jal("Object" METHOD_SEP "copy", out);
+
+  out << JAL; emit_init_ref(type_name, out); out << endl;
 }
 
 void isvoid_class::code(ostream&, CgenEnvironment *)

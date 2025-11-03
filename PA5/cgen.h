@@ -146,27 +146,28 @@ public:
    VarBinding *lookup_var(Symbol name)
    { return var_table.lookup(name ); }
 
-   int lookup_method(Symbol name);
+   int lookup_method(Symbol);
+   int lookup_method(Symbol, Symbol);
 };
 
 class CgenEnvironment {
 private:
    static int next_label;
 
-public:
    CgenClassTableEntry *entry;
-   CgenEnvironment(CgenClassTableEntry *e)
-   : entry(e)
+   CgenClassTable *table;
+
+public:
+   CgenEnvironment(CgenClassTableEntry *e, CgenClassTable *t)
+   : entry(e),
+     table(t)
    {}
 
    int get_next_label() { return next_label++; }
    char *get_file_name() { return entry->get_file_name()->get_string(); }
 
-   VarBinding *lookup_var(Symbol name)
-   { return entry->lookup_var(name); }
-
-   int lookup_method(Symbol name)
-   { return entry->lookup_method(name); }
+   VarBinding *lookup_var(Symbol);
+   int lookup_method(Symbol, Symbol);
 };
 
 class BoolConst 
