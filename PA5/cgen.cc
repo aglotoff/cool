@@ -1530,8 +1530,38 @@ void assign_class::code(ostream& out, CgenEnvironment *env)
   var->code_update(out);
 }
 
-void static_dispatch_class::code(ostream&, CgenEnvironment *)
+void static_dispatch_class::code(ostream& out, CgenEnvironment *env)
 {
+  // Push arguments onto the stack
+  for (int i = actual->first(); actual->more(i); i = actual->next(i)) {
+    actual->nth(i)->code(out, env);
+    emit_push(ACC, out);
+  }
+
+  expr->code(out, env);
+
+  int label = env->get_next_label();
+
+  emit_bne(ACC, ZERO, label, out);
+
+  // abort dispatch
+  StringEntry *filename = stringtable.lookup_string(env->get_file_name());
+  emit_load_string(ACC, filename, out); // filename in $a0
+  emit_load_imm(T1, get_line_number(), out); // line number in $t1
+  emit_jal("_dispatch_abort", out);
+
+  emit_label_def(label, out);
+
+  int offset = env->lookup_method(type_name, name);
+
+  emit_partial_load_address(T1, out);
+  emit_disptable_ref(type_name, out);
+  out << endl;
+
+  emit_load(T1, offset, T1, out);
+  emit_jalr(T1, out);
+
+  // The arguments are popped off the stack by the callee
 }
 
 void dispatch_class::code(ostream& out, CgenEnvironment *env)
@@ -1601,6 +1631,8 @@ void loop_class::code(ostream& out, CgenEnvironment *env)
   emit_branch(start_label, out);
 
   emit_label_def(end_label, out);
+
+  emit_load_imm(ACC, 0, out);
 }
 
 void typcase_class::code(ostream&, CgenEnvironment *)
