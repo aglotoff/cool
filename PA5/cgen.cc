@@ -1319,8 +1319,23 @@ void dispatch_class::code(ostream& out, CgenEnvironment *env)
   // The arguments are popped off the stack by the callee
 }
 
-void cond_class::code(ostream&, CgenEnvironment *)
+void cond_class::code(ostream& out, CgenEnvironment *env)
 {
+  int else_label = env->get_next_label();
+  int fi_label = env->get_next_label();
+
+  pred->code(out, env);
+
+  emit_load(T1, DEFAULT_OBJFIELDS, ACC, out);
+  emit_beqz(T1, else_label, out);
+
+  then_exp->code(out, env);
+  emit_branch(fi_label, out);
+
+  emit_label_def(else_label, out);
+  else_exp->code(out, env);
+
+  emit_label_def(fi_label, out);
 }
 
 void loop_class::code(ostream&, CgenEnvironment *)
@@ -1341,40 +1356,162 @@ void let_class::code(ostream&, CgenEnvironment *)
 {
 }
 
-void plus_class::code(ostream&, CgenEnvironment *)
+void plus_class::code(ostream& out, CgenEnvironment *env)
 {
+  e1->code(out, env);
+  emit_push(ACC, out);
+
+  e2->code(out, env);
+  emit_jal("Object" METHOD_SEP "copy", out);
+
+  emit_addiu(SP, SP, 4, out);
+  emit_load(T1, 0, SP, out);
+  
+  emit_load(T1, DEFAULT_OBJFIELDS, T1, out);
+  emit_load(T2, DEFAULT_OBJFIELDS, ACC, out);
+  emit_add(T1, T1, T2, out);
+
+  emit_store(T1, DEFAULT_OBJFIELDS, ACC, out);
 }
 
-void sub_class::code(ostream&, CgenEnvironment *)
+void sub_class::code(ostream& out, CgenEnvironment *env)
 {
+  e1->code(out, env);
+  emit_push(ACC, out);
+
+  e2->code(out, env);
+  emit_jal("Object" METHOD_SEP "copy", out);
+
+  emit_addiu(SP, SP, 4, out);
+  emit_load(T1, 0, SP, out);
+  
+  emit_load(T1, DEFAULT_OBJFIELDS, T1, out);
+  emit_load(T2, DEFAULT_OBJFIELDS, ACC, out);
+  emit_sub(T1, T1, T2, out);
+
+  emit_store(T1, DEFAULT_OBJFIELDS, ACC, out);
 }
 
-void mul_class::code(ostream&, CgenEnvironment *)
+void mul_class::code(ostream& out, CgenEnvironment *env)
 {
+  e1->code(out, env);
+  emit_push(ACC, out);
+
+  e2->code(out, env);
+  emit_jal("Object" METHOD_SEP "copy", out);
+
+  emit_addiu(SP, SP, 4, out);
+  emit_load(T1, 0, SP, out);
+  
+  emit_load(T1, DEFAULT_OBJFIELDS, T1, out);
+  emit_load(T2, DEFAULT_OBJFIELDS, ACC, out);
+  emit_mul(T1, T1, T2, out);
+
+  emit_store(T1, DEFAULT_OBJFIELDS, ACC, out);
 }
 
-void divide_class::code(ostream&, CgenEnvironment *)
+void divide_class::code(ostream& out, CgenEnvironment *env)
 {
+  e1->code(out, env);
+  emit_push(ACC, out);
+
+  e2->code(out, env);
+
+  emit_jal("Object" METHOD_SEP "copy", out);
+
+  emit_addiu(SP, SP, 4, out);
+  emit_load(T1, 0, SP, out);
+  
+  emit_load(T1, DEFAULT_OBJFIELDS, T1, out);
+  emit_load(T2, DEFAULT_OBJFIELDS, ACC, out);
+  emit_div(T1, T1, T2, out);
+
+  emit_store(T1, DEFAULT_OBJFIELDS, ACC, out);
 }
 
-void neg_class::code(ostream&, CgenEnvironment *)
+void neg_class::code(ostream& out, CgenEnvironment *env)
 {
+  e1->code(out, env);
+
+  emit_jal("Object" METHOD_SEP "copy", out);
+
+  emit_load(T1, DEFAULT_OBJFIELDS, ACC, out);
+  emit_neg(T1, T1, out);
+
+  emit_store(T1, DEFAULT_OBJFIELDS, ACC, out);
 }
 
-void lt_class::code(ostream&, CgenEnvironment *)
+void lt_class::code(ostream& out, CgenEnvironment *env)
 {
+  int label = env->get_next_label();
+
+  e1->code(out, env);
+  emit_push(ACC, out);
+
+  e2->code(out, env);
+
+  emit_addiu(SP, SP, 4, out);
+  emit_load(T1, 0, SP, out);
+
+  emit_load(T1, DEFAULT_OBJFIELDS, T1, out);
+  emit_load(T2, DEFAULT_OBJFIELDS, ACC, out);
+
+  emit_load_bool(ACC, true_bool, out);
+  emit_blt(T1, T2, label, out);
+  emit_load_bool(ACC, false_bool, out);
+  emit_label_def(label, out);
 }
 
-void eq_class::code(ostream&, CgenEnvironment *)
+void eq_class::code(ostream& out, CgenEnvironment *env)
 {
+  e1->code(out, env);
+  emit_push(ACC, out);
+
+  e2->code(out, env);
+
+  emit_addiu(SP, SP, 4, out);
+  emit_load(T1, 0, SP, out);
+
+  emit_move(T2, ACC, out);
+
+  emit_load_bool(ACC, true_bool, out);
+  emit_load_bool(A1, false_bool, out);
+  
+  emit_jal("equality_test", out);
 }
 
-void leq_class::code(ostream&, CgenEnvironment *)
+void leq_class::code(ostream& out, CgenEnvironment *env)
 {
+  int label = env->get_next_label();
+
+  e1->code(out, env);
+  emit_push(ACC, out);
+
+  e2->code(out, env);
+
+  emit_addiu(SP, SP, 4, out);
+  emit_load(T1, 0, SP, out);
+
+  emit_load(T1, DEFAULT_OBJFIELDS, T1, out);
+  emit_load(T2, DEFAULT_OBJFIELDS, ACC, out);
+
+  emit_load_bool(ACC, true_bool, out);
+  emit_bleq(T1, T2, label, out);
+  emit_load_bool(ACC, false_bool, out);
+  emit_label_def(label, out);
 }
 
-void comp_class::code(ostream&, CgenEnvironment *)
+void comp_class::code(ostream& out, CgenEnvironment *env)
 {
+  int label = env->get_next_label();
+
+  e1->code(out, env);
+
+  emit_load(T1, DEFAULT_OBJFIELDS, ACC, out);
+  emit_load_bool(ACC, true_bool, out);
+  emit_beqz(T1, label, out);
+  emit_load_bool(ACC, false_bool, out);
+  emit_label_def(label, out);
 }
 
 void int_const_class::code(ostream& out, CgenEnvironment *)  
