@@ -54,6 +54,19 @@ public:
    void code_update(ostream &);
 };
 
+class LocalBinding : public VarBinding {
+private:
+   Symbol type;
+   int offset;
+
+public:
+   LocalBinding(Symbol, int);
+
+   Symbol get_type();
+   void code_read(ostream &);
+   void code_update(ostream &);
+};
+
 class CgenClassTable {
 private:
    List<CgenClassTableEntry> *list;
@@ -148,6 +161,7 @@ public:
 
    int lookup_method(Symbol);
    int lookup_method(Symbol, Symbol);
+   void add_local(Symbol, Symbol, int);
 };
 
 class CgenEnvironment {
@@ -168,6 +182,8 @@ public:
 
    VarBinding *lookup_var(Symbol);
    int lookup_method(Symbol, Symbol);
+
+   void add_local(Symbol, Symbol, int);
 };
 
 class BoolConst 

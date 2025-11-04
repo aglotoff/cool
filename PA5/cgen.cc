@@ -1089,8 +1089,11 @@ void CgenClassTableEntry::code_methods(ostream &out)
 {
   if (!is_basic()) {
     Features features = tree_node->get_features();
-    for (int i = features->first(); features->more(i); i = features->next(i))
+    for (int i = features->first(); features->more(i); i = features->next(i)) {
+      var_table.enterscope();
       features->nth(i)->code_method(out, env);
+      var_table.exitscope();
+    }
   }
 
   for (List<CgenClassTableEntry> *l = children; l; l = l->tl())
@@ -1112,6 +1115,11 @@ int CgenClassTableEntry::lookup_method(Symbol class_name, Symbol method_name)
   return entry->lookup_method(method_name);
 }
 
+void CgenClassTableEntry::add_local(Symbol name, Symbol type, int offset)
+{
+  var_table.addid(name, new LocalBinding(type, offset));
+}
+
 int CgenEnvironment::next_label = 0;
 
 VarBinding *CgenEnvironment::lookup_var(Symbol name)
@@ -1129,9 +1137,14 @@ int CgenEnvironment::lookup_method(Symbol class_name, Symbol method_name)
   return e->lookup_method(method_name);
 }
 
+void CgenEnvironment::add_local(Symbol name, Symbol type, int offset)
+{
+  entry->add_local(name, type, offset);
+}
+
 ///////////////////////////////////////////////////////////////////////
 //
-// AttributeBinding methods
+// Variable bindings
 //
 ///////////////////////////////////////////////////////////////////////
 
@@ -1168,6 +1181,26 @@ void SelfBinding::code_read(ostream &out)
 void SelfBinding::code_update(ostream &)
 {
   // do nothing (cannot write to self!)
+}
+
+LocalBinding::LocalBinding(Symbol t, int o)
+: type(t),
+  offset(o)
+{}
+
+Symbol LocalBinding::get_type()
+{
+  return type;
+}
+
+void LocalBinding::code_read(ostream &out)
+{
+  emit_load(ACC, offset, FP, out);
+}
+
+void LocalBinding::code_update(ostream &out)
+{
+  emit_store(ACC, offset, FP, out);
 }
 
 ///////////////////////////////////////////////////////////////////////
@@ -1225,6 +1258,11 @@ void method_class::code_init(ostream &, CgenEnvironment *)
 
 void method_class::code_method(ostream &out, CgenEnvironment *env)
 {
+  for (int i = formals->first(); formals->more(i); i = formals->next(i)) {
+    Formal f = formals->nth(i);
+    env->add_local(f->get_name(), f->get_type(), 3 + i);
+  }
+
   // TODO: replace with real class name
   emit_method_ref(Main, name, out); out << LABEL;
   emit_function_prologue(out);
