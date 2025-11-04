@@ -101,10 +101,12 @@ typedef Cases_class *Cases;
 
 
 #define Case_EXTRAS \
-  virtual void dump_with_types(ostream&, int) = 0;
+  virtual void dump_with_types(ostream&, int) = 0; \
+  virtual int calc_locals() = 0;
 
 #define branch_EXTRAS \
-  void dump_with_types(ostream&, int);
+  void dump_with_types(ostream&, int); \
+  int calc_locals();
 
 
 #define Expression_EXTRAS \
@@ -112,12 +114,14 @@ typedef Cases_class *Cases;
   Symbol get_type() { return type; } \
   Expression set_type(Symbol s) { type = s; return this; } \
   virtual void code(ostream&, CgenEnvironment *) = 0; \
+  virtual int calc_locals() = 0; \
   virtual void dump_with_types(ostream&, int) = 0; \
   void dump_type(ostream&, int); \
   Expression_class() { type = (Symbol) NULL; }
 
 #define Expression_SHARED_EXTRAS \
   void code(ostream&, CgenEnvironment *); \
-  void dump_with_types(ostream&, int); 
+  void dump_with_types(ostream&, int); \
+  int calc_locals();
 
 #endif

@@ -1089,11 +1089,8 @@ void CgenClassTableEntry::code_methods(ostream &out)
 {
   if (!is_basic()) {
     Features features = tree_node->get_features();
-    for (int i = features->first(); features->more(i); i = features->next(i)) {
-      var_table.enterscope();
+    for (int i = features->first(); features->more(i); i = features->next(i))
       features->nth(i)->code_method(out, env);
-      var_table.exitscope();
-    }
   }
 
   for (List<CgenClassTableEntry> *l = children; l; l = l->tl())
@@ -1115,9 +1112,31 @@ int CgenClassTableEntry::lookup_method(Symbol class_name, Symbol method_name)
   return entry->lookup_method(method_name);
 }
 
-void CgenClassTableEntry::add_local(Symbol name, Symbol type, int offset)
+void CgenClassTableEntry::add_formal(Symbol name, Symbol type, int offset)
 {
   var_table.addid(name, new LocalBinding(type, offset));
+}
+
+void CgenClassTableEntry::add_local(Symbol name, Symbol type)
+{
+  var_table.enterscope();
+  var_table.addid(name, new LocalBinding(type, next_local_offset--));
+}
+
+void CgenClassTableEntry::remove_local()
+{
+  next_local_offset++;
+  var_table.exitscope();
+}
+
+void CgenClassTableEntry::enter_scope()
+{
+  var_table.enterscope();
+}
+
+void CgenClassTableEntry::exit_scope()
+{
+  var_table.exitscope();
 }
 
 int CgenEnvironment::next_label = 0;
@@ -1137,9 +1156,29 @@ int CgenEnvironment::lookup_method(Symbol class_name, Symbol method_name)
   return e->lookup_method(method_name);
 }
 
-void CgenEnvironment::add_local(Symbol name, Symbol type, int offset)
+void CgenEnvironment::add_formal(Symbol name, Symbol type, int offset)
 {
-  entry->add_local(name, type, offset);
+  entry->add_formal(name, type, offset);
+}
+
+void CgenEnvironment::add_local(Symbol name, Symbol type)
+{
+  entry->add_local(name, type);
+}
+
+void CgenEnvironment::remove_local()
+{
+  entry->remove_local();
+}
+
+void CgenEnvironment::enter_scope()
+{
+  entry->enter_scope();
+}
+
+void CgenEnvironment::exit_scope()
+{
+  entry->exit_scope();
 }
 
 ///////////////////////////////////////////////////////////////////////
@@ -1258,16 +1297,219 @@ void method_class::code_init(ostream &, CgenEnvironment *)
 
 void method_class::code_method(ostream &out, CgenEnvironment *env)
 {
+  env->enter_scope();
+
   for (int i = formals->first(); formals->more(i); i = formals->next(i)) {
     Formal f = formals->nth(i);
-    env->add_local(f->get_name(), f->get_type(), 3 + i);
+    env->add_formal(f->get_name(), f->get_type(), 3 + i);
   }
+
+  int locals = expr->calc_locals();
 
   // TODO: replace with real class name
   emit_method_ref(Main, name, out); out << LABEL;
   emit_function_prologue(out);
+
+  if (locals)
+    emit_addiu(SP, SP, -locals * WORD_SIZE, out);
+
   expr->code(out, env);
+
+  if (locals)
+    emit_addiu(SP, SP, locals * WORD_SIZE, out);
+
   emit_function_epilogue(formals->len(), out);
+
+  env->exit_scope();
+}
+
+int branch_class::calc_locals()
+{
+  return expr->calc_locals() + 1;
+}
+
+int assign_class::calc_locals()
+{
+  return expr->calc_locals();
+}
+
+int static_dispatch_class::calc_locals()
+{
+  int max = expr->calc_locals();
+
+  for (int i = actual->first(); actual->more(i); i = actual->next(i)) {
+    int n = actual->nth(i)->calc_locals();
+    if (n > max)
+      max = n;
+  }
+
+  return max;
+}
+
+int dispatch_class::calc_locals()
+{
+  int max = expr->calc_locals();
+
+  for (int i = actual->first(); actual->more(i); i = actual->next(i)) {
+    int n = actual->nth(i)->calc_locals();
+    if (n > max)
+      max = n;
+  }
+
+  return max;
+}
+
+int cond_class::calc_locals()
+{
+  int pred_locals = pred->calc_locals();
+  int then_locals = then_exp->calc_locals();
+  int else_locals = then_exp->calc_locals();
+
+  int max = pred_locals;
+  if (then_locals > max)
+    max = then_locals;
+  if (else_locals > max)
+    max = else_locals;
+
+  return max;
+}
+
+int loop_class::calc_locals()
+{
+  int pred_class = pred->calc_locals();
+  int body_class = body->calc_locals();
+
+  return pred_class > body_class ? pred_class : body_class;
+}
+
+int typcase_class::calc_locals()
+{
+  int max = expr->calc_locals();
+
+  for (int i = cases->first(); cases->more(i); i = cases->next(i)) {
+    int n = cases->nth(i)->calc_locals();
+    if (n > max)
+      max = n;
+  }
+
+  return max;
+}
+
+int block_class::calc_locals()
+{
+  int max = 0;
+
+  for (int i = body->first(); body->more(i); i = body->next(i)) {
+    int n = body->nth(i)->calc_locals();
+    if (n > max)
+      max = n;
+  }
+
+  return max;
+}
+
+int let_class::calc_locals()
+{
+  int init_locals = init->calc_locals();
+  int body_locals = body->calc_locals();
+
+  int max = init_locals > body_locals ? init_locals : body_locals;
+
+  return max + 1;
+}
+
+int plus_class::calc_locals()
+{
+  int n1 = e1->calc_locals();
+  int n2 = e2->calc_locals();
+  return n1 > n2 ? n1 : n2;
+}
+
+int sub_class::calc_locals()
+{
+  int n1 = e1->calc_locals();
+  int n2 = e2->calc_locals();
+  return n1 > n2 ? n1 : n2;
+}
+
+int mul_class::calc_locals()
+{
+  int n1 = e1->calc_locals();
+  int n2 = e2->calc_locals();
+  return n1 > n2 ? n1 : n2;
+}
+
+int divide_class::calc_locals()
+{
+  int n1 = e1->calc_locals();
+  int n2 = e2->calc_locals();
+  return n1 > n2 ? n1 : n2;
+}
+
+int neg_class::calc_locals()
+{
+  return e1->calc_locals();
+}
+
+int lt_class::calc_locals()
+{
+  int n1 = e1->calc_locals();
+  int n2 = e2->calc_locals();
+  return n1 > n2 ? n1 : n2;
+}
+
+int eq_class::calc_locals()
+{
+  int n1 = e1->calc_locals();
+  int n2 = e2->calc_locals();
+  return n1 > n2 ? n1 : n2;
+}
+
+int leq_class::calc_locals()
+{
+  int n1 = e1->calc_locals();
+  int n2 = e2->calc_locals();
+  return n1 > n2 ? n1 : n2;
+}
+
+int comp_class::calc_locals()
+{
+  return e1->calc_locals();
+}
+
+int int_const_class::calc_locals()
+{
+  return 0;
+}
+
+int string_const_class::calc_locals()
+{
+  return 0;
+}
+
+int bool_const_class::calc_locals()
+{
+  return 0;
+}
+
+int new__class::calc_locals()
+{
+  return 0;
+}
+
+int isvoid_class::calc_locals()
+{
+  return e1->calc_locals();
+}
+
+int no_expr_class::calc_locals()
+{
+  return 0;
+}
+
+int object_class::calc_locals()
+{
+  return 0;
 }
 
 //******************************************************************
@@ -1280,7 +1522,7 @@ void method_class::code_method(ostream &out, CgenEnvironment *env)
 //
 //*****************************************************************
 
-void assign_class::code(ostream&, CgenEnvironment *)
+void assign_class::code(ostream& out, CgenEnvironment *env)
 {
 }
 
@@ -1352,8 +1594,29 @@ void block_class::code(ostream& out, CgenEnvironment *env)
     body->nth(i)->code(out, env);
 }
 
-void let_class::code(ostream&, CgenEnvironment *)
+void let_class::code(ostream& out, CgenEnvironment *env)
 {
+  env->add_local(identifier, type_decl);
+
+  VarBinding *var = env->lookup_var(identifier);
+  assert(var);
+
+  if (init->get_type() && init->get_type() != No_type)
+    init->code(out, env);
+  else if (type_decl == Int)
+    emit_load_int(ACC, inttable.lookup_string("0"), out);
+  else if (type_decl == Str)
+    emit_load_string(ACC, stringtable.lookup_string(""), out);
+  else if (type_decl == Bool)
+    emit_load_bool(ACC, false_bool, out);
+  else
+    emit_load_imm(ACC, 0, out);
+
+  var->code_update(out);
+
+  body->code(out, env);
+
+  env->remove_local();
 }
 
 void plus_class::code(ostream& out, CgenEnvironment *env)

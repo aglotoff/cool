@@ -130,6 +130,8 @@ private:
    SymbolTable<Symbol, VarBinding> var_table;
    int attribute_count;
 
+   int next_local_offset = -1;
+
 public:
    CgenClassTableEntry(Class_, Basicness, CgenClassTable *);
 
@@ -161,7 +163,11 @@ public:
 
    int lookup_method(Symbol);
    int lookup_method(Symbol, Symbol);
-   void add_local(Symbol, Symbol, int);
+   void add_formal(Symbol, Symbol, int);
+   void add_local(Symbol, Symbol);
+   void remove_local();
+   void enter_scope();
+   void exit_scope();
 };
 
 class CgenEnvironment {
@@ -183,7 +189,11 @@ public:
    VarBinding *lookup_var(Symbol);
    int lookup_method(Symbol, Symbol);
 
-   void add_local(Symbol, Symbol, int);
+   void add_formal(Symbol, Symbol, int);
+   void add_local(Symbol, Symbol);
+   void remove_local();
+   void enter_scope();
+   void exit_scope();
 };
 
 class BoolConst 
