@@ -184,6 +184,7 @@ public:
    {}
 
    int get_next_label() { return next_label++; }
+   Symbol get_class_name() { return entry->get_name(); }
    char *get_file_name() { return entry->get_file_name()->get_string(); }
 
    VarBinding *lookup_var(Symbol);

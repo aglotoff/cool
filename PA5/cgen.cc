@@ -1301,13 +1301,12 @@ void method_class::code_method(ostream &out, CgenEnvironment *env)
 
   for (int i = formals->first(); formals->more(i); i = formals->next(i)) {
     Formal f = formals->nth(i);
-    env->add_formal(f->get_name(), f->get_type(), 3 + i);
+    env->add_formal(f->get_name(), f->get_type(), 2 + formals->len() - i);
   }
 
   int locals = expr->calc_locals();
 
-  // TODO: replace with real class name
-  emit_method_ref(Main, name, out); out << LABEL;
+  emit_method_ref(env->get_class_name(), name, out); out << LABEL;
   emit_function_prologue(out);
 
   if (locals)
@@ -1524,6 +1523,11 @@ int object_class::calc_locals()
 
 void assign_class::code(ostream& out, CgenEnvironment *env)
 {
+  VarBinding *var = env->lookup_var(name);
+  assert(var);
+
+  expr->code(out, env);
+  var->code_update(out);
 }
 
 void static_dispatch_class::code(ostream&, CgenEnvironment *)
@@ -1580,8 +1584,23 @@ void cond_class::code(ostream& out, CgenEnvironment *env)
   emit_label_def(fi_label, out);
 }
 
-void loop_class::code(ostream&, CgenEnvironment *)
+void loop_class::code(ostream& out, CgenEnvironment *env)
 {
+  int start_label = env->get_next_label();
+  int end_label = env->get_next_label();
+
+  emit_label_def(start_label, out);
+
+  pred->code(out, env);
+
+  emit_load(T1, DEFAULT_OBJFIELDS, ACC, out);
+  emit_beqz(T1, end_label, out);
+
+  body->code(out, env);
+
+  emit_branch(start_label, out);
+
+  emit_label_def(end_label, out);
 }
 
 void typcase_class::code(ostream&, CgenEnvironment *)
@@ -1596,11 +1615,6 @@ void block_class::code(ostream& out, CgenEnvironment *env)
 
 void let_class::code(ostream& out, CgenEnvironment *env)
 {
-  env->add_local(identifier, type_decl);
-
-  VarBinding *var = env->lookup_var(identifier);
-  assert(var);
-
   if (init->get_type() && init->get_type() != No_type)
     init->code(out, env);
   else if (type_decl == Int)
@@ -1611,6 +1625,11 @@ void let_class::code(ostream& out, CgenEnvironment *env)
     emit_load_bool(ACC, false_bool, out);
   else
     emit_load_imm(ACC, 0, out);
+
+  env->add_local(identifier, type_decl);
+
+  VarBinding *var = env->lookup_var(identifier);
+  assert(var);
 
   var->code_update(out);
 
@@ -1807,8 +1826,17 @@ void new__class::code(ostream& out, CgenEnvironment *env)
   out << JAL; emit_init_ref(type_name, out); out << endl;
 }
 
-void isvoid_class::code(ostream&, CgenEnvironment *)
+void isvoid_class::code(ostream& out, CgenEnvironment *env)
 {
+  int label = env->get_next_label();
+
+  e1->code(out, env);
+  emit_move(T1, ACC, out);
+
+  emit_load_bool(ACC, true_bool, out);
+  emit_beqz(T1, label, out);
+  emit_load_bool(ACC, false_bool, out);
+  emit_label_def(label, out);
 }
 
 void no_expr_class::code(ostream&, CgenEnvironment *)
