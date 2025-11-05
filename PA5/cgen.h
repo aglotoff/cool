@@ -88,6 +88,7 @@ private:
    void code_select_gc();
    void code_constants();
    void code_class_nametab();
+   void code_class_objtab();
 
 // The following creates an inheritance graph from
 // a list of classes.  The graph is implemented as
@@ -153,6 +154,7 @@ public:
    void add_attribute(Symbol, Symbol);
 
    void code_class_nametab(ostream&);
+   void code_class_objtab(ostream&);
    void code_dispatch_table(ostream&);
    void code_prototype_object(ostream&);
    void code_init(ostream&);

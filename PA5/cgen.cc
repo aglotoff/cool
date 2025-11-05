@@ -779,6 +779,9 @@ void CgenClassTable::code()
   if (cgen_debug) cout << "coding class_nameTab" << endl;
   code_class_nametab();
 
+  if (cgen_debug) cout << "coding class_objTab" << endl;
+  code_class_objtab();
+
   if (cgen_debug) cout << "coding dispatch tables" << endl;
   root()->code_dispatch_table(out);
 
@@ -889,6 +892,12 @@ void CgenClassTable::code_class_nametab()
   root()->code_class_nametab(out);
 }
 
+void CgenClassTable::code_class_objtab()
+{
+  out << CLASSOBJTAB << LABEL;
+  root()->code_class_objtab(out);
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 //
 //  Emit code to start the .text segment and to
@@ -991,6 +1000,15 @@ void CgenClassTableEntry::code_class_nametab(ostream& out)
 
   for (List<CgenClassTableEntry> *l = children; l; l = l->tl())
     l->hd()->code_class_nametab(out);
+}
+
+void CgenClassTableEntry::code_class_objtab(ostream& out)
+{
+  out << WORD; emit_protobj_ref(get_name(), out); out << endl;
+  out << WORD; emit_init_ref(get_name(), out); out << endl;
+
+  for (List<CgenClassTableEntry> *l = children; l; l = l->tl())
+    l->hd()->code_class_objtab(out);
 }
 
 void CgenClassTableEntry::code_dispatch_table(ostream& out)
@@ -1907,14 +1925,32 @@ void bool_const_class::code(ostream& out, CgenEnvironment *)
 }
 
 void new__class::code(ostream& out, CgenEnvironment *env)
-{
-  emit_partial_load_address(ACC, out);
-  emit_protobj_ref(type_name, out);
-  out << endl;
+{  
+  if (type_name == SELF_TYPE) {
+    emit_load_address(T1, CLASSOBJTAB, out);
+    emit_load(T2, TAG_OFFSET, SELF, out);
+    emit_sll(T2, T2, LOG_WORD_SIZE + 1, out);
+    emit_addu(T1, T1, T2, out);
+    
+    emit_push(T1, out);
 
-  emit_jal("Object" METHOD_SEP "copy", out);
+    emit_load(ACC, 0, T1, out);
+    emit_jal("Object" METHOD_SEP "copy", out);
 
-  out << JAL; emit_init_ref(type_name, out); out << endl;
+    emit_addiu(SP, SP, 4, out);
+    emit_load(T1, 0, SP, out);
+
+    emit_load(T2, 1, T1, out);
+    emit_jalr(T2, out);
+  } else {
+    emit_partial_load_address(ACC, out);
+    emit_protobj_ref(type_name, out);
+    out << endl;
+
+    emit_jal("Object" METHOD_SEP "copy", out);
+
+    out << JAL; emit_init_ref(type_name, out); out << endl;
+  }
 }
 
 void isvoid_class::code(ostream& out, CgenEnvironment *env)
