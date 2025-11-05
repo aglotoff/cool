@@ -1156,6 +1156,13 @@ int CgenEnvironment::lookup_method(Symbol class_name, Symbol method_name)
   return e->lookup_method(method_name);
 }
 
+int CgenEnvironment::lookup_tag(Symbol class_name)
+{
+  CgenClassTableEntryP e = table->lookup(class_name);
+  assert(e);
+  return e->get_tag();
+}
+
 void CgenEnvironment::add_formal(Symbol name, Symbol type, int offset)
 {
   entry->add_formal(name, type, offset);
@@ -1635,8 +1642,54 @@ void loop_class::code(ostream& out, CgenEnvironment *env)
   emit_load_imm(ACC, 0, out);
 }
 
-void typcase_class::code(ostream&, CgenEnvironment *)
+void branch_class::code(ostream& out, CgenEnvironment *env, int end_label)
 {
+  int end_branch_label = env->get_next_label();
+  int tag = env->lookup_tag(type_decl);
+
+  emit_load_imm(T2, tag, out);
+  emit_bne(T1, T2, end_branch_label, out);
+
+  env->add_local(name, type_decl);
+
+  VarBinding *var = env->lookup_var(name);
+  assert(var);
+
+  var->code_update(out);
+
+  expr->code(out, env);
+
+  env->remove_local();
+
+  emit_branch(end_label, out);
+
+  emit_label_def(end_branch_label, out);
+}
+
+void typcase_class::code(ostream& out, CgenEnvironment *env)
+{
+  int start_label = env->get_next_label();
+  int end_label = env->get_next_label();
+
+  expr->code(out, env);
+
+  emit_bne(ACC, ZERO, start_label, out);
+
+  StringEntry *filename = stringtable.lookup_string(env->get_file_name());
+  emit_load_string(ACC, filename, out); // filename in $a0
+  emit_load_imm(T1, get_line_number(), out); // line number in $t1
+  emit_jal("_case_abort2", out);
+
+  emit_label_def(start_label, out);
+
+  emit_load(T1, TAG_OFFSET, ACC, out);
+
+  for (int i = cases->first(); cases->more(i); i = cases->next(i))
+    cases->nth(i)->code(out, env, end_label);
+
+  emit_jal("_case_abort", out);
+
+  emit_label_def(end_label, out);
 }
 
 void block_class::code(ostream& out, CgenEnvironment *env)

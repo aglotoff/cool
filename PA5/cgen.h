@@ -189,6 +189,7 @@ public:
 
    VarBinding *lookup_var(Symbol);
    int lookup_method(Symbol, Symbol);
+   int lookup_tag(Symbol);
 
    void add_formal(Symbol, Symbol, int);
    void add_local(Symbol, Symbol);
