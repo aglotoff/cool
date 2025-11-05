@@ -1831,6 +1831,8 @@ void lt_class::code(ostream& out, CgenEnvironment *env)
 
 void eq_class::code(ostream& out, CgenEnvironment *env)
 {
+  int end_label = env->get_next_label();
+
   e1->code(out, env);
   emit_push(ACC, out);
 
@@ -1842,9 +1844,13 @@ void eq_class::code(ostream& out, CgenEnvironment *env)
   emit_move(T2, ACC, out);
 
   emit_load_bool(ACC, true_bool, out);
+  emit_beq(T1, T2, end_label, out);
+
   emit_load_bool(A1, false_bool, out);
   
   emit_jal("equality_test", out);
+
+  emit_label_def(end_label, out);
 }
 
 void leq_class::code(ostream& out, CgenEnvironment *env)
