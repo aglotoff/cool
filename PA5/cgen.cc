@@ -565,7 +565,7 @@ CgenClassTable::CgenClassTable(Classes classes, ostream& o)
     SymbolTable<Symbol, MethodBinding>(),
     0,
     SymbolTable<int, Entry>(),
-    SymbolTable<Symbol, VarBinding>()
+    SymbolTable<Symbol, ObjectBinding>()
   );
 
   string_class_tag = table->probe(Str)->get_tag();
@@ -960,7 +960,7 @@ void CgenClassTableEntry::init(
   SymbolTable<Symbol, MethodBinding> mt,
   int nao,
   SymbolTable<int, Entry> ant,
-  SymbolTable<Symbol, VarBinding> at)
+  SymbolTable<Symbol, ObjectBinding> at)
 {
   tag = class_table->assign_class_tag(get_name());
 
@@ -1044,7 +1044,7 @@ void CgenClassTableEntry::code_prototype_object(ostream &out)
   for (int i = 0; i < attribute_count; i++) {
     Symbol attr_name = attr_name_table.lookup(i);
     assert(attr_name);
-    VarBinding *attr_binding = var_table.lookup(attr_name);
+    ObjectBinding *attr_binding = var_table.lookup(attr_name);
     assert(attr_binding);
 
     out << WORD;
@@ -1159,9 +1159,9 @@ void CgenClassTableEntry::exit_scope()
 
 int CgenEnvironment::next_label = 0;
 
-VarBinding *CgenEnvironment::lookup_var(Symbol name)
+ObjectBinding *CgenEnvironment::lookup_object(Symbol name)
 {
-  return entry->lookup_var(name);
+  return entry->lookup_object(name);
 }
 
 int CgenEnvironment::lookup_method(Symbol class_name, Symbol method_name)
@@ -1179,6 +1179,19 @@ int CgenEnvironment::lookup_tag(Symbol class_name)
   CgenClassTableEntryP e = table->lookup(class_name);
   assert(e);
   return e->get_tag();
+}
+
+int CgenEnvironment::lookup_max_child_tag(Symbol class_name)
+{
+  CgenClassTableEntryP e = table->lookup(class_name);
+  assert(e);
+
+  int tag = e->get_tag();
+
+  for (List<CgenClassTableEntry> *l = e->get_children(); l; l = l->tl())
+    tag = lookup_max_child_tag(l->hd()->get_name());
+  
+  return tag;
 }
 
 void CgenEnvironment::add_formal(Symbol name, Symbol type, int offset)
@@ -1230,6 +1243,8 @@ void AttributeBinding::code_read(ostream &out)
 void AttributeBinding::code_update(ostream &out)
 {
   emit_store(ACC, DEFAULT_OBJFIELDS + offset, SELF, out);
+  // emit_addiu(A1, SELF, (DEFAULT_OBJFIELDS + offset) * WORD_SIZE, out);
+  // emit_gc_assign(out);
 }
 
 Symbol SelfBinding::get_type()
@@ -1297,7 +1312,7 @@ void attr_class::add_feature(CgenClassTableEntry *entry)
 void attr_class::code_init(ostream &out, CgenEnvironment *env)
 {
   if (init->type) {
-    VarBinding *var = env->lookup_var(name);
+    ObjectBinding *var = env->lookup_object(name);
     assert(var);
 
     init->code(out, env);
@@ -1548,7 +1563,7 @@ int object_class::calc_locals()
 
 void assign_class::code(ostream& out, CgenEnvironment *env)
 {
-  VarBinding *var = env->lookup_var(name);
+  ObjectBinding *var = env->lookup_object(name);
   assert(var);
 
   expr->code(out, env);
@@ -1663,14 +1678,16 @@ void loop_class::code(ostream& out, CgenEnvironment *env)
 void branch_class::code(ostream& out, CgenEnvironment *env, int end_label)
 {
   int end_branch_label = env->get_next_label();
-  int tag = env->lookup_tag(type_decl);
 
-  emit_load_imm(T2, tag, out);
-  emit_bne(T1, T2, end_branch_label, out);
+  int tag = env->lookup_tag(type_decl);
+  int max_child_tag = env->lookup_max_child_tag(type_decl);
+
+  emit_blti(T1, tag, end_branch_label, out);
+  emit_bgti(T1, max_child_tag, end_branch_label, out);
 
   env->add_local(name, type_decl);
 
-  VarBinding *var = env->lookup_var(name);
+  ObjectBinding *var = env->lookup_object(name);
   assert(var);
 
   var->code_update(out);
@@ -1702,8 +1719,14 @@ void typcase_class::code(ostream& out, CgenEnvironment *env)
 
   emit_load(T1, TAG_OFFSET, ACC, out);
 
-  for (int i = cases->first(); cases->more(i); i = cases->next(i))
-    cases->nth(i)->code(out, env, end_label);
+  for (int tag = env->lookup_max_child_tag(Object); tag >= 0; tag--) {
+    for (int i = cases->first(); cases->more(i); i = cases->next(i)) {
+      Case_class *branch = cases->nth(i);
+
+      if (env->lookup_tag(branch->get_type_decl()) == tag)
+        branch->code(out, env, end_label);
+    }
+  }
 
   emit_jal("_case_abort", out);
 
@@ -1731,7 +1754,7 @@ void let_class::code(ostream& out, CgenEnvironment *env)
 
   env->add_local(identifier, type_decl);
 
-  VarBinding *var = env->lookup_var(identifier);
+  ObjectBinding *var = env->lookup_object(identifier);
   assert(var);
 
   var->code_update(out);
@@ -1972,7 +1995,7 @@ void no_expr_class::code(ostream&, CgenEnvironment *)
 
 void object_class::code(ostream& out, CgenEnvironment *env)
 {
-  VarBinding *var = env->lookup_var(name);
-  assert(var);
-  var->code_read(out);
+  ObjectBinding *obj = env->lookup_object(name);
+  assert(obj);
+  obj->code_read(out);
 }

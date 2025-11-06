@@ -27,14 +27,14 @@ public:
    void code_ref(ostream &);
 };
 
-class VarBinding {
+class ObjectBinding {
 public:
    virtual Symbol get_type() = 0;
    virtual void code_read(ostream &) = 0;
    virtual void code_update(ostream &) = 0;
 };
 
-class AttributeBinding : public VarBinding {
+class AttributeBinding : public ObjectBinding {
 private:
    Symbol type;
    int offset;
@@ -47,14 +47,14 @@ public:
    void code_update(ostream &);
 };
 
-class SelfBinding : public VarBinding {
+class SelfBinding : public ObjectBinding {
 public:
    Symbol get_type();
    void code_read(ostream &);
    void code_update(ostream &);
 };
 
-class LocalBinding : public VarBinding {
+class LocalBinding : public ObjectBinding {
 private:
    Symbol type;
    int offset;
@@ -128,7 +128,7 @@ private:
    int dispatch_table_len;
 
    SymbolTable<int, Entry> attr_name_table;
-   SymbolTable<Symbol, VarBinding> var_table;
+   SymbolTable<Symbol, ObjectBinding> var_table;
    int attribute_count;
 
    int next_local_offset = -1;
@@ -148,7 +148,7 @@ public:
    void set_parent(CgenClassTableEntryP);
 
    void init(int, SymbolTable<int, Entry>, SymbolTable<Symbol, MethodBinding>,
-      int, SymbolTable<int, Entry>, SymbolTable<Symbol, VarBinding>);
+      int, SymbolTable<int, Entry>, SymbolTable<Symbol, ObjectBinding>);
 
    void add_method(Symbol);
    void add_attribute(Symbol, Symbol);
@@ -160,7 +160,7 @@ public:
    void code_init(ostream&);
    void code_methods(ostream&);
 
-   VarBinding *lookup_var(Symbol name)
+   ObjectBinding *lookup_object(Symbol name)
    { return var_table.lookup(name ); }
 
    int lookup_method(Symbol);
@@ -189,9 +189,10 @@ public:
    Symbol get_class_name() { return entry->get_name(); }
    char *get_file_name() { return entry->get_file_name()->get_string(); }
 
-   VarBinding *lookup_var(Symbol);
+   ObjectBinding *lookup_object(Symbol);
    int lookup_method(Symbol, Symbol);
    int lookup_tag(Symbol);
+   int lookup_max_child_tag(Symbol);
 
    void add_formal(Symbol, Symbol, int);
    void add_local(Symbol, Symbol);

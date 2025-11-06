@@ -103,12 +103,14 @@ typedef Cases_class *Cases;
 #define Case_EXTRAS \
   virtual void dump_with_types(ostream&, int) = 0; \
   virtual int calc_locals() = 0; \
-  virtual void code(ostream&, CgenEnvironment *, int) = 0;
+  virtual void code(ostream&, CgenEnvironment *, int) = 0; \
+  virtual Symbol get_type_decl() = 0;
 
 #define branch_EXTRAS \
   void dump_with_types(ostream&, int); \
   int calc_locals(); \
-  void code(ostream&, CgenEnvironment *, int);
+  void code(ostream&, CgenEnvironment *, int); \
+  Symbol get_type_decl() { return type_decl; };
 
 
 #define Expression_EXTRAS \
