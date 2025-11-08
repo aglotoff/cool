@@ -416,6 +416,17 @@ static void emit_function_epilogue(int formal_count, ostream &out)
   emit_return(out);
 }
 
+//
+// Load filename in $a0 and line number in $t1 before calling abort function
+//
+static void
+emit_load_file_and_line(tree_node *t, ostream &out, CgenEnvironment *env)
+{
+  StringEntry *filename = stringtable.lookup_string(env->get_file_name());
+  emit_load_string(ACC, filename, out);
+  emit_load_imm(T1, t->get_line_number(), out);
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 //
 // coding strings, ints, and booleans
@@ -1376,6 +1387,14 @@ void method_class::code_method(ostream &out, CgenEnvironment *env)
   env->exit_scope();
 }
 
+///////////////////////////////////////////////////////////////////////////////
+//
+//  For each expression, determine how much space is required to allocate for
+//  local variables. Locals are allocated on the stack, and we need to know
+//  the maximum number of simultaneously active variables
+//
+///////////////////////////////////////////////////////////////////////////////
+
 int branch_class::calc_locals()
 {
   return expr->calc_locals() + 1;
@@ -1567,32 +1586,21 @@ int object_class::calc_locals()
 
 //******************************************************************
 //
-//   Fill in the following methods to produce code for the
-//   appropriate expression.  You may add or remove parameters
-//   as you wish, but if you do, remember to change the parameters
-//   of the declarations in `cool-tree.h'  Sample code for
-//   constant integers, strings, and booleans are provided.
+//   Methods to produce code for each expression.
 //
 //*****************************************************************
 
 void assign_class::code(ostream& out, CgenEnvironment *env)
 {
-  ObjectBinding *var = env->lookup_object(name);
-  assert(var);
+  ObjectBinding *obj = env->lookup_object(name);
+  assert(obj);
 
   expr->code(out, env);
-  var->code_update(out);
+  obj->code_update(out);
 }
 
 void static_dispatch_class::code(ostream& out, CgenEnvironment *env)
 {
-  if (type_name == SELF_TYPE) {
-    StringEntry *filename = stringtable.lookup_string(env->get_file_name());
-    emit_load_string(ACC, filename, out); // filename in $a0
-    emit_load_imm(T1, get_line_number(), out); // line number in $t1
-    emit_jal("_dispatch_abort", out);
-  }
-
   // Push arguments onto the stack
   for (int i = actual->first(); actual->more(i); i = actual->next(i)) {
     actual->nth(i)->code(out, env);
@@ -1601,24 +1609,25 @@ void static_dispatch_class::code(ostream& out, CgenEnvironment *env)
 
   expr->code(out, env);
 
-  int label = env->get_next_label();
+  // Check for void, and skip abort if not
+  int skip_abort_label = env->get_next_label();
+  emit_bne(ACC, ZERO, skip_abort_label, out);
 
-  emit_bne(ACC, ZERO, label, out);
-
-  // abort dispatch
-  StringEntry *filename = stringtable.lookup_string(env->get_file_name());
-  emit_load_string(ACC, filename, out); // filename in $a0
-  emit_load_imm(T1, get_line_number(), out); // line number in $t1
+  // Dispatch on void - abort
+  emit_load_file_and_line(this, out, env);
   emit_jal("_dispatch_abort", out);
 
-  emit_label_def(label, out);
+  // Begin normal dispatch
+  emit_label_def(skip_abort_label, out);
 
-  int offset = env->lookup_method(type_name, name);
-
+  // Lookup the dispatch table for the given class
+  // TODO: check for self
   emit_partial_load_address(T1, out);
   emit_disptable_ref(type_name, out);
   out << endl;
 
+  // Call the method
+  int offset = env->lookup_method(type_name, name);
   emit_load(T1, offset, T1, out);
   emit_jalr(T1, out);
 
@@ -1635,21 +1644,21 @@ void dispatch_class::code(ostream& out, CgenEnvironment *env)
 
   expr->code(out, env);
 
-  int label = env->get_next_label();
+  // Check for void, and skip abort if not
+  int skip_abort_label = env->get_next_label();
+  emit_bne(ACC, ZERO, skip_abort_label, out);
 
-  emit_bne(ACC, ZERO, label, out);
-
-  // abort dispatch
-  StringEntry *filename = stringtable.lookup_string(env->get_file_name());
-  emit_load_string(ACC, filename, out); // filename in $a0
-  emit_load_imm(T1, get_line_number(), out); // line number in $t1
+  // Dispatch on void - abort
+  emit_load_file_and_line(this, out, env);
   emit_jal("_dispatch_abort", out);
 
-  emit_label_def(label, out);
+  emit_label_def(skip_abort_label, out);
 
-  int offset = env->lookup_method(expr->get_type(), name);
-
+  // Lookup the dispatch table
   emit_load(T1, DISPTABLE_OFFSET, ACC, out);
+
+  // Call the method
+  int offset = env->lookup_method(expr->get_type(), name);
   emit_load(T1, offset, T1, out);
   emit_jalr(T1, out);
 
@@ -1698,13 +1707,6 @@ void loop_class::code(ostream& out, CgenEnvironment *env)
 
 void branch_class::code(ostream& out, CgenEnvironment *env, int end_label)
 {
-  if (type_decl == SELF_TYPE) {
-    StringEntry *filename = stringtable.lookup_string(env->get_file_name());
-    emit_load_string(ACC, filename, out); // filename in $a0
-    emit_load_imm(T1, get_line_number(), out); // line number in $t1
-    emit_jal("_dispatch_abort", out);
-  }
-
   int end_branch_label = env->get_next_label();
 
   int tag = env->lookup_tag(type_decl);
@@ -1738,9 +1740,7 @@ void typcase_class::code(ostream& out, CgenEnvironment *env)
 
   emit_bne(ACC, ZERO, start_label, out);
 
-  StringEntry *filename = stringtable.lookup_string(env->get_file_name());
-  emit_load_string(ACC, filename, out); // filename in $a0
-  emit_load_imm(T1, get_line_number(), out); // line number in $t1
+  emit_load_file_and_line(this, out, env);
   emit_jal("_case_abort2", out);
 
   emit_label_def(start_label, out);
@@ -1890,57 +1890,66 @@ void lt_class::code(ostream& out, CgenEnvironment *env)
 
 void eq_class::code(ostream& out, CgenEnvironment *env)
 {
-  int end_label = env->get_next_label();
+  int done_label = env->get_next_label();
 
   e1->code(out, env);
   emit_push(ACC, out);
-
   e2->code(out, env);
-
   emit_pop(T1, out);
 
   emit_move(T2, ACC, out);
 
+  // Assume true by default
   emit_load_bool(ACC, true_bool, out);
-  emit_beq(T1, T2, end_label, out);
 
+  // First, check for pointer equality and, if true, we're done
+  emit_beq(T1, T2, done_label, out);
+
+  // Call the equality testing function
   emit_load_bool(A1, false_bool, out);
-  
   emit_jal("equality_test", out);
 
-  emit_label_def(end_label, out);
+  emit_label_def(done_label, out);
 }
 
 void leq_class::code(ostream& out, CgenEnvironment *env)
 {
-  int label = env->get_next_label();
+  int done_label = env->get_next_label();
 
   e1->code(out, env);
   emit_push(ACC, out);
-
   e2->code(out, env);
-
   emit_pop(T1, out);
 
   emit_fetch_int(T1, T1, out);
   emit_fetch_int(T2, ACC, out);
+
+  // Assume true by default
   emit_load_bool(ACC, true_bool, out);
-  emit_bleq(T1, T2, label, out);
+
+  // If t1 < t2, done; otherwise load false
+  emit_bleq(T1, T2, done_label, out);
   emit_load_bool(ACC, false_bool, out);
-  emit_label_def(label, out);
+
+  emit_label_def(done_label, out);
 }
 
 void comp_class::code(ostream& out, CgenEnvironment *env)
 {
-  int end_label = env->get_next_label();
+  int done_label = env->get_next_label();
 
+  // Evaluate expression and store the bool value in t1
   e1->code(out, env);
-
   emit_fetch_int(T1, ACC, out);
+
+  // Assume true by default
   emit_load_bool(ACC, true_bool, out);
-  emit_beqz(T1, end_label, out);
+
+  // If t1 is zero, done; otherwise the result is false
+  emit_beqz(T1, done_label, out);
   emit_load_bool(ACC, false_bool, out);
-  emit_label_def(end_label, out);
+
+  emit_label_def(done_label, out);
 }
 
 void int_const_class::code(ostream& out, CgenEnvironment *)  
@@ -2000,16 +2009,20 @@ void new__class::code(ostream& out, CgenEnvironment *env)
 
 void isvoid_class::code(ostream& out, CgenEnvironment *env)
 {
-  int end_label = env->get_next_label();
+  int done_label = env->get_next_label();
 
+  // Evaluate expression and store the result in t1
   e1->code(out, env);
-
   emit_move(T1, ACC, out);
 
+  // Assume true by default
   emit_load_bool(ACC, true_bool, out);
-  emit_beqz(T1, end_label, out);
+
+  // If t1 is zero, done; otherwise the result is false
+  emit_beqz(T1, done_label, out);
   emit_load_bool(ACC, false_bool, out);
-  emit_label_def(end_label, out);
+
+  emit_label_def(done_label, out);
 }
 
 void no_expr_class::code(ostream&, CgenEnvironment *)

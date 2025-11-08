@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <stdio.h>
+
 #include "emit.h"
 #include "cool-tree.h"
 #include "symtab.h"
