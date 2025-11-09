@@ -1157,13 +1157,13 @@ void CgenClassTableEntry::add_formal(Symbol name, Symbol type, int offset)
   var_table.addid(name, new LocalBinding(type, offset));
 }
 
-void CgenClassTableEntry::add_local(Symbol name, Symbol type)
+void CgenClassTableEntry::enter_local(Symbol name, Symbol type)
 {
   var_table.enterscope();
   var_table.addid(name, new LocalBinding(type, next_local_offset--));
 }
 
-void CgenClassTableEntry::remove_local()
+void CgenClassTableEntry::exit_local()
 {
   next_local_offset++;
   var_table.exitscope();
@@ -1224,14 +1224,14 @@ void CgenEnvironment::add_formal(Symbol name, Symbol type, int offset)
   entry->add_formal(name, type, offset);
 }
 
-void CgenEnvironment::add_local(Symbol name, Symbol type)
+void CgenEnvironment::enter_local(Symbol name, Symbol type)
 {
-  entry->add_local(name, type);
+  entry->enter_local(name, type);
 }
 
-void CgenEnvironment::remove_local()
+void CgenEnvironment::exit_local()
 {
-  entry->remove_local();
+  entry->exit_local();
 }
 
 void CgenEnvironment::enter_scope()
@@ -1260,7 +1260,7 @@ Symbol AttributeBinding::get_type()
   return type;
 }
 
-void AttributeBinding::code_read(ostream &out)
+void AttributeBinding::code_load(ostream &out)
 {
   emit_load(ACC, DEFAULT_OBJFIELDS + offset, SELF, out);
 }
@@ -1277,7 +1277,7 @@ Symbol SelfBinding::get_type()
   return SELF_TYPE;
 }
 
-void SelfBinding::code_read(ostream &out)
+void SelfBinding::code_load(ostream &out)
 {
   emit_move(ACC, SELF, out);
 }
@@ -1297,7 +1297,7 @@ Symbol LocalBinding::get_type()
   return type;
 }
 
-void LocalBinding::code_read(ostream &out)
+void LocalBinding::code_load(ostream &out)
 {
   emit_load(ACC, offset, FP, out);
 }
@@ -1601,7 +1601,7 @@ void assign_class::code(ostream& out, CgenEnvironment *env)
 
 void static_dispatch_class::code(ostream& out, CgenEnvironment *env)
 {
-  // Push arguments onto the stack
+  // Push the arguments onto the stack
   for (int i = actual->first(); actual->more(i); i = actual->next(i)) {
     actual->nth(i)->code(out, env);
     emit_push(ACC, out);
@@ -1636,7 +1636,7 @@ void static_dispatch_class::code(ostream& out, CgenEnvironment *env)
 
 void dispatch_class::code(ostream& out, CgenEnvironment *env)
 {
-  // Push arguments onto the stack
+  // Push the arguments onto the stack
   for (int i = actual->first(); actual->more(i); i = actual->next(i)) {
     actual->nth(i)->code(out, env);
     emit_push(ACC, out);
@@ -1668,20 +1668,24 @@ void dispatch_class::code(ostream& out, CgenEnvironment *env)
 void cond_class::code(ostream& out, CgenEnvironment *env)
 {
   int else_label = env->get_next_label();
-  int fi_label = env->get_next_label();
+  int done_label = env->get_next_label();
 
+  // Evaluate the predicate expression
   pred->code(out, env);
 
+  // If false, jump to the else branch
   emit_load(T1, DEFAULT_OBJFIELDS, ACC, out);
   emit_beqz(T1, else_label, out);
 
+  // Execute the true branch and exit
   then_exp->code(out, env);
-  emit_branch(fi_label, out);
+  emit_branch(done_label, out);
 
+  // Execute the else branch
   emit_label_def(else_label, out);
   else_exp->code(out, env);
 
-  emit_label_def(fi_label, out);
+  emit_label_def(done_label, out);
 }
 
 void loop_class::code(ostream& out, CgenEnvironment *env)
@@ -1691,74 +1695,87 @@ void loop_class::code(ostream& out, CgenEnvironment *env)
 
   emit_label_def(start_label, out);
 
+  // Evaluate the predicate expression
   pred->code(out, env);
 
+  // If false, jump to exit
   emit_load(T1, DEFAULT_OBJFIELDS, ACC, out);
   emit_beqz(T1, end_label, out);
 
   body->code(out, env);
 
+  // Repeat
   emit_branch(start_label, out);
 
   emit_label_def(end_label, out);
 
+  // The result of the loop expression is always void
   emit_load_imm(ACC, 0, out);
 }
 
-void branch_class::code(ostream& out, CgenEnvironment *env, int end_label)
+void branch_class::code(ostream& out, CgenEnvironment *env, int match_label)
 {
-  int end_branch_label = env->get_next_label();
+  int next_branch_label = env->get_next_label();
 
+  // The class and all its children have consequtive tags, so we can check the
+  // interval to determine whether we have a match
   int tag = env->lookup_tag(type_decl);
   int max_child_tag = env->lookup_max_child_tag(type_decl);
+  emit_blti(T1, tag, next_branch_label, out);
+  emit_bgti(T1, max_child_tag, next_branch_label, out);
 
-  emit_blti(T1, tag, end_branch_label, out);
-  emit_bgti(T1, max_child_tag, end_branch_label, out);
+  env->enter_local(name, type_decl);
 
-  env->add_local(name, type_decl);
-
-  ObjectBinding *var = env->lookup_object(name);
-  assert(var);
-
-  var->code_update(out);
+  // Store the pointer to the matched object into the branch variable
+  ObjectBinding *obj = env->lookup_object(name);
+  assert(obj);
+  obj->code_update(out);
 
   expr->code(out, env);
 
-  env->remove_local();
+  env->exit_local();
 
-  emit_branch(end_label, out);
+  // Done
+  emit_branch(match_label, out);
 
-  emit_label_def(end_branch_label, out);
+  emit_label_def(next_branch_label, out);
 }
 
 void typcase_class::code(ostream& out, CgenEnvironment *env)
 {
-  int start_label = env->get_next_label();
-  int end_label = env->get_next_label();
+  int not_void_label = env->get_next_label();
+  int match_label = env->get_next_label();
 
+  // Evaluate the expression
   expr->code(out, env);
 
-  emit_bne(ACC, ZERO, start_label, out);
+  // Skip abort if the result is not void
+  emit_bne(ACC, ZERO, not_void_label, out);
 
+  // Case on void - abort
   emit_load_file_and_line(this, out, env);
   emit_jal("_case_abort2", out);
 
-  emit_label_def(start_label, out);
+  emit_label_def(not_void_label, out);
 
+  // Fetch the class tag
   emit_load(T1, TAG_OFFSET, ACC, out);
 
+  // Try to match branches from the largest class tag to the smallest one
+  // (smaller tags correspond to higher classes in the inheritance tree)
   for (int tag = env->lookup_max_child_tag(Object); tag >= 0; tag--) {
     for (int i = cases->first(); cases->more(i); i = cases->next(i)) {
       Case_class *branch = cases->nth(i);
 
       if (env->lookup_tag(branch->get_type_decl()) == tag)
-        branch->code(out, env, end_label);
+        branch->code(out, env, match_label);
     }
   }
 
+  // No match - abort
   emit_jal("_case_abort", out);
 
-  emit_label_def(end_label, out);
+  emit_label_def(match_label, out);
 }
 
 void block_class::code(ostream& out, CgenEnvironment *env)
@@ -1769,133 +1786,160 @@ void block_class::code(ostream& out, CgenEnvironment *env)
 
 void let_class::code(ostream& out, CgenEnvironment *env)
 {
-  if (init->get_type() && init->get_type() != No_type)
+  if (init->get_type() && init->get_type() != No_type) {
+    // Evaluate the init expression
     init->code(out, env);
-  else if (type_decl == Int)
-    emit_load_int(ACC, inttable.lookup_string("0"), out);
-  else if (type_decl == Str)
-    emit_load_string(ACC, stringtable.lookup_string(""), out);
-  else if (type_decl == Bool)
-    emit_load_bool(ACC, false_bool, out);
-  else
-    emit_load_imm(ACC, 0, out);
+  } else {
+    // Load the default init value
+    if (type_decl == Int)
+      emit_load_int(ACC, inttable.lookup_string("0"), out);
+    else if (type_decl == Str)
+      emit_load_string(ACC, stringtable.lookup_string(""), out);
+    else if (type_decl == Bool)
+      emit_load_bool(ACC, false_bool, out);
+    else
+      emit_load_imm(ACC, 0, out);
+  }
 
-  env->add_local(identifier, type_decl);
+  env->enter_local(identifier, type_decl);
 
-  ObjectBinding *var = env->lookup_object(identifier);
-  assert(var);
-
-  var->code_update(out);
+  // Write the init value
+  ObjectBinding *obj = env->lookup_object(identifier);
+  assert(obj);
+  obj->code_update(out);
 
   body->code(out, env);
 
-  env->remove_local();
+  env->exit_local();
 }
 
 void plus_class::code(ostream& out, CgenEnvironment *env)
 {
+  // Evaluate the first expression
   e1->code(out, env);
+  
   emit_push(ACC, out);
 
+  // Evaluate the second expression and copy the result
   e2->code(out, env);
   emit_jal("Object" METHOD_SEP "copy", out);
 
   emit_pop(T1, out);
 
-  emit_fetch_int(T1, T1, out);
-  emit_fetch_int(T2, ACC, out);
+  emit_fetch_int(T1, T1, out); // fetch the first int value into t1
+  emit_fetch_int(T2, ACC, out); // fetch the second int value into t2
+
+  // Store the addition result in the copied object
   emit_add(T1, T1, T2, out);
   emit_store_int(T1, ACC, out);
 }
 
 void sub_class::code(ostream& out, CgenEnvironment *env)
 {
+  // Evaluate the first expression
   e1->code(out, env);
+  
   emit_push(ACC, out);
 
+  // Evaluate the second expression and copy the result
   e2->code(out, env);
   emit_jal("Object" METHOD_SEP "copy", out);
 
   emit_pop(T1, out);
   
-  emit_fetch_int(T1, T1, out);
-  emit_fetch_int(T2, ACC, out);
+  emit_fetch_int(T1, T1, out); // fetch the first int value into t1
+  emit_fetch_int(T2, ACC, out); // fetch the second int value into t2
+
+  // Store the subtraction result in the copied object
   emit_sub(T1, T1, T2, out);
   emit_store_int(T1, ACC, out);
 }
 
 void mul_class::code(ostream& out, CgenEnvironment *env)
 {
+  // Evaluate the first expression
   e1->code(out, env);
+  
   emit_push(ACC, out);
 
+  // Evaluate the second expression and copy the result
   e2->code(out, env);
   emit_jal("Object" METHOD_SEP "copy", out);
 
   emit_pop(T1, out);
   
-  emit_fetch_int(T1, T1, out);
-  emit_fetch_int(T2, ACC, out);
+  emit_fetch_int(T1, T1, out); // fetch the first int value into t1
+  emit_fetch_int(T2, ACC, out); // fetch the second int value into t2
+
+  // Store the multiplication result in the copied object
   emit_mul(T1, T1, T2, out);
   emit_store_int(T1, ACC, out);
 }
 
 void divide_class::code(ostream& out, CgenEnvironment *env)
 {
+  // Evaluate the first expression
   e1->code(out, env);
+  
   emit_push(ACC, out);
 
+  // Evaluate the second expression and copy the result
   e2->code(out, env);
-
   emit_jal("Object" METHOD_SEP "copy", out);
 
   emit_pop(T1, out);
   
-  emit_fetch_int(T1, T1, out);
-  emit_fetch_int(T2, ACC, out);
+  emit_fetch_int(T1, T1, out); // fetch the first int value into t1
+  emit_fetch_int(T2, ACC, out); // fetch the second int value into t2
+
+  // Store the division result in the copied object
   emit_div(T1, T1, T2, out);
   emit_store_int(T1, ACC, out);
 }
 
 void neg_class::code(ostream& out, CgenEnvironment *env)
 {
+  // Evaluate expression and copy the result
   e1->code(out, env);
-
   emit_jal("Object" METHOD_SEP "copy", out);
 
-  emit_fetch_int(T1, ACC, out);
+  emit_fetch_int(T1, ACC, out); // fetch the int value
+
+  // Store the negation result in the copied object
   emit_neg(T1, T1, out);
   emit_store_int(T1, ACC, out);
 }
 
 void lt_class::code(ostream& out, CgenEnvironment *env)
 {
-  int label = env->get_next_label();
+  int done_label = env->get_next_label();
 
-  e1->code(out, env);
-  emit_push(ACC, out);
+  e1->code(out, env); // evaluate the first expression
+  emit_push(ACC, out); // save the result on stack
+  e2->code(out, env); // evaluate the second expression
+  emit_pop(T1, out); // restore the first result
 
-  e2->code(out, env);
+  emit_fetch_int(T1, T1, out); // fetch the first int value into t1
+  emit_fetch_int(T2, ACC, out); // fetch the second int value into t1
 
-  emit_pop(T1, out);
-
-  emit_fetch_int(T1, T1, out);
-  emit_fetch_int(T2, ACC, out);
-
+  // Assume true by default
   emit_load_bool(ACC, true_bool, out);
-  emit_blt(T1, T2, label, out);
+
+  // If t1 < t2 done; otherwise load false
+  emit_blt(T1, T2, done_label, out);
   emit_load_bool(ACC, false_bool, out);
-  emit_label_def(label, out);
+
+  emit_label_def(done_label, out);
 }
 
 void eq_class::code(ostream& out, CgenEnvironment *env)
 {
   int done_label = env->get_next_label();
 
-  e1->code(out, env);
-  emit_push(ACC, out);
-  e2->code(out, env);
-  emit_pop(T1, out);
+  e1->code(out, env); // evaluate the first expression
+  emit_push(ACC, out); // save the result on stack
+  e2->code(out, env); // evaluate the second expression
+  emit_pop(T1, out); // restore the first result
 
   emit_move(T2, ACC, out);
 
@@ -1916,18 +1960,18 @@ void leq_class::code(ostream& out, CgenEnvironment *env)
 {
   int done_label = env->get_next_label();
 
-  e1->code(out, env);
-  emit_push(ACC, out);
-  e2->code(out, env);
-  emit_pop(T1, out);
+  e1->code(out, env); // evaluate the first expression
+  emit_push(ACC, out); // save the result on stack
+  e2->code(out, env); // evaluate the second expression
+  emit_pop(T1, out); // restore the first result
 
-  emit_fetch_int(T1, T1, out);
-  emit_fetch_int(T2, ACC, out);
+  emit_fetch_int(T1, T1, out); // fetch the first int value into t1
+  emit_fetch_int(T2, ACC, out); // fetch the second int value into t2
 
   // Assume true by default
   emit_load_bool(ACC, true_bool, out);
 
-  // If t1 < t2, done; otherwise load false
+  // If t1 <= t2 done; otherwise load false
   emit_bleq(T1, T2, done_label, out);
   emit_load_bool(ACC, false_bool, out);
 
@@ -1974,7 +2018,7 @@ void bool_const_class::code(ostream& out, CgenEnvironment *)
 void new__class::code(ostream& out, CgenEnvironment *env)
 {  
   if (type_name == SELF_TYPE) {
-    // T1 <- &class_objTab[tag]
+    // Locate class_objTab entry
     emit_load_address(T1, CLASSOBJTAB, out);  
     emit_load(T2, TAG_OFFSET, SELF, out);
     emit_sll(T2, T2, LOG_WORD_SIZE + 1, out); 
@@ -1982,27 +2026,27 @@ void new__class::code(ostream& out, CgenEnvironment *env)
     
     emit_push(T1, out);
 
-    // ACC <- class_objTab[tag].protObj
-    emit_load(ACC, 0, T1, out);
+    // Load the prototype object
+    emit_load(ACC, PROTOBJ_OFFSET, T1, out);
 
-    // Call Object.copy
+    // Copy the prototype object
     emit_jal("Object" METHOD_SEP "copy", out);
 
     emit_pop(T1, out);
 
-    // T1 <- class_objTab[tag].init
-    emit_load(T1, 1, T1, out);
+    // Call the object initializer
+    emit_load(T1, INIT_OFFSET, T1, out);
     emit_jalr(T1, out);
   } else {
-    // ACC <- prototype object
+    // Load the prototype object
     emit_partial_load_address(ACC, out);
     emit_protobj_ref(type_name, out);
     out << endl;
 
-    // Call Object.copy
+    // Copy the prototype object
     emit_jal("Object" METHOD_SEP "copy", out);
 
-    // Call initializer
+    // Call the object initializer
     out << JAL; emit_init_ref(type_name, out); out << endl;
   }
 }
@@ -2033,5 +2077,5 @@ void object_class::code(ostream& out, CgenEnvironment *env)
 {
   ObjectBinding *obj = env->lookup_object(name);
   assert(obj);
-  obj->code_read(out);
+  obj->code_load(out);
 }

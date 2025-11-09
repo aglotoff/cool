@@ -31,7 +31,7 @@ public:
 class ObjectBinding {
 public:
    virtual Symbol get_type() = 0;
-   virtual void code_read(ostream &) = 0;
+   virtual void code_load(ostream &) = 0;
    virtual void code_update(ostream &) = 0;
 };
 
@@ -44,14 +44,14 @@ public:
    AttributeBinding(Symbol, int);
 
    Symbol get_type();
-   void code_read(ostream &);
+   void code_load(ostream &);
    void code_update(ostream &);
 };
 
 class SelfBinding : public ObjectBinding {
 public:
    Symbol get_type();
-   void code_read(ostream &);
+   void code_load(ostream &);
    void code_update(ostream &);
 };
 
@@ -64,7 +64,7 @@ public:
    LocalBinding(Symbol, int);
 
    Symbol get_type();
-   void code_read(ostream &);
+   void code_load(ostream &);
    void code_update(ostream &);
 };
 
@@ -167,8 +167,8 @@ public:
    int lookup_method(Symbol);
    int lookup_method(Symbol, Symbol);
    void add_formal(Symbol, Symbol, int);
-   void add_local(Symbol, Symbol);
-   void remove_local();
+   void enter_local(Symbol, Symbol);
+   void exit_local();
    void enter_scope();
    void exit_scope();
 };
@@ -196,8 +196,8 @@ public:
    int lookup_max_child_tag(Symbol);
 
    void add_formal(Symbol, Symbol, int);
-   void add_local(Symbol, Symbol);
-   void remove_local();
+   void enter_local(Symbol, Symbol);
+   void exit_local();
    void enter_scope();
    void exit_scope();
 };

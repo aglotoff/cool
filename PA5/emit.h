@@ -112,3 +112,9 @@
 #define RA_OFFSET     1
 #define SELF_OFFSET   2
 #define FP_OFFSET     3
+
+//
+// Class obj tab
+//
+#define PROTOBJ_OFFSET  0
+#define INIT_OFFSET     1
