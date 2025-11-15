@@ -77,15 +77,15 @@ typedef Cases_class *Cases;
 #define Feature_EXTRAS \
   virtual Symbol get_name() = 0; \
   virtual void add_feature(CgenClassTableEntry *) = 0; \
-  virtual void code_init(ostream&, CgenEnvironment *) = 0; \
-  virtual void code_method(ostream&, CgenEnvironment *) = 0; \
+  virtual void code_init(ostream&, CgenClassTableEntry *) = 0; \
+  virtual void code_method(ostream&, CgenClassTableEntry *) = 0; \
   virtual void dump_with_types(ostream&, int) = 0; 
 
 #define Feature_SHARED_EXTRAS \
   Symbol get_name() { return name; } \
   void add_feature(CgenClassTableEntry *); \
-  void code_init(ostream&, CgenEnvironment *); \
-  void code_method(ostream&, CgenEnvironment *); \
+  void code_init(ostream&, CgenClassTableEntry *); \
+  void code_method(ostream&, CgenClassTableEntry *); \
   void dump_with_types(ostream&, int);    
 
 
@@ -102,13 +102,13 @@ typedef Cases_class *Cases;
 
 #define Case_EXTRAS \
   virtual void dump_with_types(ostream&, int) = 0; \
-  virtual int calc_locals() = 0; \
+  virtual int estimate_locals() = 0; \
   virtual void code(ostream&, CgenEnvironment *, int) = 0; \
   virtual Symbol get_type_decl() = 0;
 
 #define branch_EXTRAS \
   void dump_with_types(ostream&, int); \
-  int calc_locals(); \
+  int estimate_locals(); \
   void code(ostream&, CgenEnvironment *, int); \
   Symbol get_type_decl() { return type_decl; };
 
@@ -118,7 +118,7 @@ typedef Cases_class *Cases;
   Symbol get_type() { return type; } \
   Expression set_type(Symbol s) { type = s; return this; } \
   virtual void code(ostream&, CgenEnvironment *) = 0; \
-  virtual int calc_locals() = 0; \
+  virtual int estimate_locals() = 0; \
   virtual void dump_with_types(ostream&, int) = 0; \
   void dump_type(ostream&, int); \
   Expression_class() { type = (Symbol) NULL; }
@@ -126,6 +126,6 @@ typedef Cases_class *Cases;
 #define Expression_SHARED_EXTRAS \
   void code(ostream&, CgenEnvironment *); \
   void dump_with_types(ostream&, int); \
-  int calc_locals();
+  int estimate_locals();
 
 #endif

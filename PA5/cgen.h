@@ -90,6 +90,10 @@ private:
    void code_constants();
    void code_class_nametab();
    void code_class_objtab();
+   void code_dispatch_tables();
+   void code_prototype_objects();
+   void code_init();
+   void code_methods();
 
 // The following creates an inheritance graph from
 // a list of classes.  The graph is implemented as
@@ -122,8 +126,6 @@ private:
    int tag;
    CgenClassTable *class_table;
 
-   CgenEnvironment *env;
-
    SymbolTable<int, Entry> method_name_table;
    SymbolTable<Symbol, MethodBinding> method_table;
    int dispatch_table_len;
@@ -148,8 +150,7 @@ public:
    void add_child(CgenClassTableEntryP);
    void set_parent(CgenClassTableEntryP);
 
-   void init(int, SymbolTable<int, Entry>, SymbolTable<Symbol, MethodBinding>,
-      int, SymbolTable<int, Entry>, SymbolTable<Symbol, ObjectBinding>);
+   void init();
 
    void add_method(Symbol);
    void add_attribute(Symbol, Symbol);
@@ -164,6 +165,7 @@ public:
    ObjectBinding *lookup_object(Symbol name)
    { return var_table.lookup(name ); }
 
+   CgenClassTableEntry *lookup_class(Symbol);
    int lookup_method(Symbol);
    int lookup_method(Symbol, Symbol);
    void add_formal(Symbol, Symbol, int);
@@ -177,14 +179,11 @@ class CgenEnvironment {
 private:
    static int next_label;
 
+protected:
    CgenClassTableEntry *entry;
-   CgenClassTable *table;
 
 public:
-   CgenEnvironment(CgenClassTableEntry *e, CgenClassTable *t)
-   : entry(e),
-     table(t)
-   {}
+   CgenEnvironment(CgenClassTableEntry *e) : entry(e) {}
 
    int get_next_label() { return next_label++; }
    Symbol get_class_name() { return entry->get_name(); }
@@ -195,11 +194,15 @@ public:
    int lookup_tag(Symbol);
    int lookup_max_child_tag(Symbol);
 
-   void add_formal(Symbol, Symbol, int);
    void enter_local(Symbol, Symbol);
    void exit_local();
    void enter_scope();
    void exit_scope();
+};
+
+class CgenMethodEnvironment: public CgenEnvironment {
+public:
+   CgenMethodEnvironment(CgenClassTableEntry *, Formals);
 };
 
 class BoolConst 

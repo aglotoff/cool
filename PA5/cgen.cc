@@ -384,7 +384,7 @@ static void emit_gc_check(char *source, ostream &out)
 //
 // Setup stack frame and self pointer
 //
-static void emit_function_prologue(ostream &out)
+static void emit_function_prologue(int local_count, ostream &out)
 {
   // allocate room for the stack frame
   emit_addiu(SP, SP, -FRAME_SIZE, out);
@@ -396,6 +396,10 @@ static void emit_function_prologue(ostream &out)
   // setup new frame pointer
   emit_addiu(FP, SP, 4, out);
 
+  // Reserve space for locals on the stack
+  if (local_count)
+    emit_addiu(SP, SP, -local_count * WORD_SIZE, out);
+
   // set $s0 to point to self
   emit_move(SELF, ACC, out);
 }
@@ -403,8 +407,12 @@ static void emit_function_prologue(ostream &out)
 //
 // Restore stack frame, pop the arguments, and return
 //
-static void emit_function_epilogue(int formal_count, ostream &out)
+static void emit_function_epilogue(int formal_count, int local_count, ostream &out)
 {
+  // Free space for locals
+  if (local_count)
+    emit_addiu(SP, SP, local_count * WORD_SIZE, out);
+
   emit_load(RA, RA_OFFSET, SP, out); // restore return address
   emit_load(SELF, SELF_OFFSET, SP, out); // restore caller's self
   emit_load(FP, FP_OFFSET, SP, out); // restore caller's frame pointer
@@ -425,6 +433,42 @@ emit_load_file_and_line(tree_node *t, ostream &out, CgenEnvironment *env)
   StringEntry *filename = stringtable.lookup_string(env->get_file_name());
   emit_load_string(ACC, filename, out);
   emit_load_imm(T1, t->get_line_number(), out);
+}
+
+static void
+emit_binary_arith_operands(Expression_class *e1,
+  Expression_class *e2,
+  ostream &out,
+  CgenEnvironment *env)
+{
+  // Evaluate the first expression and save the result
+  e1->code(out, env);
+  emit_push(ACC, out);
+
+  // Evaluate the second expression and copy the result
+  e2->code(out, env);
+  emit_jal("Object" METHOD_SEP "copy", out);
+
+  // Restore the first result
+  emit_pop(T1, out);
+
+  emit_fetch_int(T1, T1, out); // fetch the first int value into t1
+  emit_fetch_int(T2, ACC, out); // fetch the second int value into t2
+}
+
+static void
+emit_binary_cmp_operands(Expression_class *e1,
+  Expression_class *e2,
+  ostream &out,
+  CgenEnvironment *env)
+{
+  e1->code(out, env); // evaluate the first expression
+  emit_push(ACC, out); // save the result on stack
+  e2->code(out, env); // evaluate the second expression
+  emit_pop(T1, out); // restore the first result
+
+  emit_fetch_int(T1, T1, out); // fetch the first int value into t1
+  emit_fetch_int(T2, ACC, out); // fetch the second int value into t1
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -578,14 +622,7 @@ CgenClassTable::CgenClassTable(Classes classes, ostream& o)
   install_classes(classes);
   build_inheritance_tree();
 
-  root()->init(
-    0,
-    SymbolTable<int, Entry>(),
-    SymbolTable<Symbol, MethodBinding>(),
-    0,
-    SymbolTable<int, Entry>(),
-    SymbolTable<Symbol, ObjectBinding>()
-  );
+  root()->init();
 
   string_class_tag = table->probe(Str)->get_tag();
   int_class_tag = table->probe(Int)->get_tag();
@@ -777,10 +814,10 @@ void CgenClassTable::build_inheritance_tree()
   }
 }
 
-int CgenClassTable::assign_class_tag(Symbol name)
+int CgenClassTable::assign_class_tag(Symbol class_name)
 {
   // Add class name to string table
-  stringtable.add_string(name->get_string());
+  stringtable.add_string(class_name->get_string());
   return next_class_tag++;
 }
 
@@ -802,19 +839,19 @@ void CgenClassTable::code()
   code_class_objtab();
 
   if (cgen_debug) cout << "coding dispatch tables" << endl;
-  root()->code_dispatch_table(out);
+  code_dispatch_tables();
 
   if (cgen_debug) cout << "coding prototype objects" << endl;
-  root()->code_prototype_object(out);
+  code_prototype_objects();
 
   if (cgen_debug) cout << "coding global text" << endl;
   code_global_text();
 
   if (cgen_debug) cout << "coding object initializers" << endl;
-  root()->code_init(out);
+  code_init();
 
   if (cgen_debug) cout << "coding class methods" << endl;
-  root()->code_methods(out);
+  code_methods();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -905,6 +942,15 @@ void CgenClassTable::code_bools(int bool_class_tag)
   true_bool.code_def(out, bool_class_tag);
 }
 
+///////////////////////////////////////////////////////////////////////////////
+//
+// Emit code for class_nameTab and class_objTab.
+//
+// These tables are indexed by class_tag, so the entries should be generated in
+// the inheritance tree traversal order.
+//
+///////////////////////////////////////////////////////////////////////////////
+
 void CgenClassTable::code_class_nametab()
 {
   out << CLASSNAMETAB << LABEL;
@@ -915,6 +961,11 @@ void CgenClassTable::code_class_objtab()
 {
   out << CLASSOBJTAB << LABEL;
   root()->code_class_objtab(out);
+}
+
+CgenClassTableEntryP CgenClassTable::root()
+{
+  return table->probe(Object);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -943,9 +994,28 @@ void CgenClassTable::code_global_text()
   out << endl;
 }
 
-CgenClassTableEntryP CgenClassTable::root()
+void CgenClassTable::code_dispatch_tables()
 {
-   return table->probe(Object);
+  for (List<CgenClassTableEntry> *l = list; l; l = l->tl())
+    l->hd()->code_dispatch_table(out);
+}
+
+void CgenClassTable::code_prototype_objects()
+{
+  for (List<CgenClassTableEntry> *l = list; l; l = l->tl())
+    l->hd()->code_prototype_object(out);
+}
+
+void CgenClassTable::code_init()
+{
+  for (List<CgenClassTableEntry> *l = list; l; l = l->tl())
+    l->hd()->code_init(out);
+}
+
+void CgenClassTable::code_methods()
+{
+  for (List<CgenClassTableEntry> *l = list; l; l = l->tl())
+    l->hd()->code_methods(out);
 }
 
 ///////////////////////////////////////////////////////////////////////
@@ -973,25 +1043,18 @@ void CgenClassTableEntry::set_parent(CgenClassTableEntryP p)
   parent = p;
 }
 
-void CgenClassTableEntry::init(
-  int nmo,
-  SymbolTable<int, Entry> mnt,
-  SymbolTable<Symbol, MethodBinding> mt,
-  int nao,
-  SymbolTable<int, Entry> ant,
-  SymbolTable<Symbol, ObjectBinding> at)
+void CgenClassTableEntry::init()
 {
   tag = class_table->assign_class_tag(get_name());
 
-  env = new CgenEnvironment(this, class_table);
-
-  dispatch_table_len = nmo;
-  method_name_table = mnt;
-  method_table = mt;
-
-  attribute_count = nao;
-  attr_name_table = ant;
-  var_table = at;
+  if (parent) {
+    dispatch_table_len = parent->dispatch_table_len;
+    method_name_table = parent->method_name_table;
+    method_table = parent->method_table;
+    attribute_count = parent->attribute_count;
+    attr_name_table = parent->attr_name_table;
+    var_table = parent->var_table;
+  }
 
   method_name_table.enterscope();
   method_table.enterscope();
@@ -1007,15 +1070,13 @@ void CgenClassTableEntry::init(
     features->nth(i)->add_feature(this);
 
   for (List<CgenClassTableEntry> *l = children; l; l = l->tl())
-    l->hd()->init(dispatch_table_len, method_name_table, method_table,
-      attribute_count, attr_name_table, var_table);
+    l->hd()->init();
 }
 
 void CgenClassTableEntry::code_class_nametab(ostream& out)
 {
-  StringEntry *s = stringtable.lookup_string(get_name()->get_string());
-
-  out << WORD; s->code_ref(out); out << endl;
+  StringEntry *str = stringtable.lookup_string(get_name()->get_string());
+  out << WORD; str->code_ref(out); out << endl;
 
   for (List<CgenClassTableEntry> *l = children; l; l = l->tl())
     l->hd()->code_class_nametab(out);
@@ -1042,9 +1103,6 @@ void CgenClassTableEntry::code_dispatch_table(ostream& out)
 
     out << WORD; method_binding->code_ref(out); out << endl;
   }
-
-  for (List<CgenClassTableEntry> *l = children; l; l = l->tl())
-    l->hd()->code_dispatch_table(out);
 }
 
 void CgenClassTableEntry::code_prototype_object(ostream &out)
@@ -1079,34 +1137,28 @@ void CgenClassTableEntry::code_prototype_object(ostream &out)
 
     out << endl;
   }
-
-  for (List<CgenClassTableEntry> *l = children; l; l = l->tl())
-    l->hd()->code_prototype_object(out);
 }
 
 void CgenClassTableEntry::code_init(ostream &out)
 {
   emit_init_ref(get_name(), out); out << LABEL;
 
-  emit_function_prologue(out);
+  emit_function_prologue(0, out);
 
   if (get_parent_name() != No_class) {
-    // initialize parent
+    // First, initialize the parent
     assert(parent);
     out << JAL; emit_init_ref(get_parent_name(), out); out << endl;
   }
 
-  // initialize attributes
+  // Initialize attributes
   Features features = tree_node->get_features();
   for (int i = features->first(); features->more(i); i = features->next(i))
-    features->nth(i)->code_init(out, env);
+    features->nth(i)->code_init(out, this);
 
-  // return self
+  // Return self
   emit_move(ACC, SELF, out);
-  emit_function_epilogue(0, out);
-
-  for (List<CgenClassTableEntry> *l = children; l; l = l->tl())
-    l->hd()->code_init(out);
+  emit_function_epilogue(0, 0, out);
 }
 
 void CgenClassTableEntry::add_attribute(Symbol name, Symbol type)
@@ -1127,11 +1179,13 @@ void CgenClassTableEntry::code_methods(ostream &out)
   if (!is_basic()) {
     Features features = tree_node->get_features();
     for (int i = features->first(); features->more(i); i = features->next(i))
-      features->nth(i)->code_method(out, env);
+      features->nth(i)->code_method(out, this);
   }
+}
 
-  for (List<CgenClassTableEntry> *l = children; l; l = l->tl())
-    l->hd()->code_methods(out);
+CgenClassTableEntry *CgenClassTableEntry::lookup_class(Symbol name)
+{
+  return name == SELF_TYPE ? this : class_table->lookup(name);
 }
 
 int CgenClassTableEntry::lookup_method(Symbol name)
@@ -1188,27 +1242,21 @@ ObjectBinding *CgenEnvironment::lookup_object(Symbol name)
 
 int CgenEnvironment::lookup_method(Symbol class_name, Symbol method_name)
 {
-  CgenClassTableEntryP e = (class_name == SELF_TYPE)
-    ? entry
-    : table->lookup(class_name);
+  CgenClassTableEntryP e = entry->lookup_class(class_name);
   assert(e);
   return e->lookup_method(method_name);
 }
 
 int CgenEnvironment::lookup_tag(Symbol class_name)
 {
-  CgenClassTableEntryP e = (class_name == SELF_TYPE)
-    ? entry
-    : table->lookup(class_name);
+  CgenClassTableEntryP e = entry->lookup_class(class_name);
   assert(e);
   return e->get_tag();
 }
 
 int CgenEnvironment::lookup_max_child_tag(Symbol class_name)
 {
-  CgenClassTableEntryP e = (class_name == SELF_TYPE)
-    ? entry
-    : table->lookup(class_name);
+  CgenClassTableEntryP e = entry->lookup_class(class_name);
   assert(e);
 
   int tag = e->get_tag();
@@ -1219,9 +1267,15 @@ int CgenEnvironment::lookup_max_child_tag(Symbol class_name)
   return tag;
 }
 
-void CgenEnvironment::add_formal(Symbol name, Symbol type, int offset)
+CgenMethodEnvironment::CgenMethodEnvironment(CgenClassTableEntry *entry, Formals formals)
+: CgenEnvironment(entry)
 {
-  entry->add_formal(name, type, offset);
+  enter_scope();
+
+  for (int i = formals->first(); formals->more(i); i = formals->next(i)) {
+    Formal f = formals->nth(i);
+    entry->add_formal(f->get_name(), f->get_type(), 2 + formals->len() - i);
+  }
 }
 
 void CgenEnvironment::enter_local(Symbol name, Symbol type)
@@ -1334,9 +1388,11 @@ void attr_class::add_feature(CgenClassTableEntry *entry)
   entry->add_attribute(name, type_decl);
 }
 
-void attr_class::code_init(ostream &out, CgenEnvironment *env)
+void attr_class::code_init(ostream &out, CgenClassTableEntry *entry)
 {
-  if (init->type) {
+  CgenEnvironment *env = new CgenEnvironment(entry);
+
+  if (init->type && init->type != No_type) {
     ObjectBinding *var = env->lookup_object(name);
     assert(var);
 
@@ -1345,7 +1401,7 @@ void attr_class::code_init(ostream &out, CgenEnvironment *env)
   }
 }
 
-void attr_class::code_method(ostream &, CgenEnvironment *)
+void attr_class::code_method(ostream &, CgenClassTableEntry *)
 {
   // do nothing
 }
@@ -1355,34 +1411,23 @@ void method_class::add_feature(CgenClassTableEntry *entry)
   entry->add_method(this->name);
 }
 
-void method_class::code_init(ostream &, CgenEnvironment *)
+void method_class::code_init(ostream &, CgenClassTableEntry *)
 {
   // do nothing
 }
 
-void method_class::code_method(ostream &out, CgenEnvironment *env)
+void method_class::code_method(ostream &out, CgenClassTableEntry *entry)
 {
-  env->enter_scope();
+  CgenMethodEnvironment *env = new CgenMethodEnvironment(entry, formals);
 
-  for (int i = formals->first(); formals->more(i); i = formals->next(i)) {
-    Formal f = formals->nth(i);
-    env->add_formal(f->get_name(), f->get_type(), 2 + formals->len() - i);
-  }
-
-  int locals = expr->calc_locals();
+  int locals = expr->estimate_locals();
 
   emit_method_ref(env->get_class_name(), name, out); out << LABEL;
-  emit_function_prologue(out);
-
-  if (locals)
-    emit_addiu(SP, SP, -locals * WORD_SIZE, out);
+  emit_function_prologue(locals, out);
 
   expr->code(out, env);
 
-  if (locals)
-    emit_addiu(SP, SP, locals * WORD_SIZE, out);
-
-  emit_function_epilogue(formals->len(), out);
+  emit_function_epilogue(formals->len(), locals, out);
 
   env->exit_scope();
 }
@@ -1395,22 +1440,22 @@ void method_class::code_method(ostream &out, CgenEnvironment *env)
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-int branch_class::calc_locals()
+int branch_class::estimate_locals()
 {
-  return expr->calc_locals() + 1;
+  return expr->estimate_locals() + 1;
 }
 
-int assign_class::calc_locals()
+int assign_class::estimate_locals()
 {
-  return expr->calc_locals();
+  return expr->estimate_locals();
 }
 
-int static_dispatch_class::calc_locals()
+int static_dispatch_class::estimate_locals()
 {
-  int max = expr->calc_locals();
+  int max = expr->estimate_locals();
 
   for (int i = actual->first(); actual->more(i); i = actual->next(i)) {
-    int n = actual->nth(i)->calc_locals();
+    int n = actual->nth(i)->estimate_locals();
     if (n > max)
       max = n;
   }
@@ -1418,12 +1463,12 @@ int static_dispatch_class::calc_locals()
   return max;
 }
 
-int dispatch_class::calc_locals()
+int dispatch_class::estimate_locals()
 {
-  int max = expr->calc_locals();
+  int max = expr->estimate_locals();
 
   for (int i = actual->first(); actual->more(i); i = actual->next(i)) {
-    int n = actual->nth(i)->calc_locals();
+    int n = actual->nth(i)->estimate_locals();
     if (n > max)
       max = n;
   }
@@ -1431,11 +1476,11 @@ int dispatch_class::calc_locals()
   return max;
 }
 
-int cond_class::calc_locals()
+int cond_class::estimate_locals()
 {
-  int pred_locals = pred->calc_locals();
-  int then_locals = then_exp->calc_locals();
-  int else_locals = else_exp->calc_locals();
+  int pred_locals = pred->estimate_locals();
+  int then_locals = then_exp->estimate_locals();
+  int else_locals = else_exp->estimate_locals();
 
   int max = pred_locals;
   if (then_locals > max)
@@ -1446,20 +1491,19 @@ int cond_class::calc_locals()
   return max;
 }
 
-int loop_class::calc_locals()
+int loop_class::estimate_locals()
 {
-  int pred_class = pred->calc_locals();
-  int body_class = body->calc_locals();
-
+  int pred_class = pred->estimate_locals();
+  int body_class = body->estimate_locals();
   return pred_class > body_class ? pred_class : body_class;
 }
 
-int typcase_class::calc_locals()
+int typcase_class::estimate_locals()
 {
-  int max = expr->calc_locals();
+  int max = expr->estimate_locals();
 
   for (int i = cases->first(); cases->more(i); i = cases->next(i)) {
-    int n = cases->nth(i)->calc_locals();
+    int n = cases->nth(i)->estimate_locals();
     if (n > max)
       max = n;
   }
@@ -1467,12 +1511,12 @@ int typcase_class::calc_locals()
   return max;
 }
 
-int block_class::calc_locals()
+int block_class::estimate_locals()
 {
   int max = 0;
 
   for (int i = body->first(); body->more(i); i = body->next(i)) {
-    int n = body->nth(i)->calc_locals();
+    int n = body->nth(i)->estimate_locals();
     if (n > max)
       max = n;
   }
@@ -1480,106 +1524,106 @@ int block_class::calc_locals()
   return max;
 }
 
-int let_class::calc_locals()
+int let_class::estimate_locals()
 {
-  int init_locals = init->calc_locals();
-  int body_locals = body->calc_locals();
+  int init_locals = init->estimate_locals();
+  int body_locals = body->estimate_locals();
 
   int max = init_locals > body_locals ? init_locals : body_locals;
 
   return max + 1;
 }
 
-int plus_class::calc_locals()
+int plus_class::estimate_locals()
 {
-  int n1 = e1->calc_locals();
-  int n2 = e2->calc_locals();
+  int n1 = e1->estimate_locals();
+  int n2 = e2->estimate_locals();
   return n1 > n2 ? n1 : n2;
 }
 
-int sub_class::calc_locals()
+int sub_class::estimate_locals()
 {
-  int n1 = e1->calc_locals();
-  int n2 = e2->calc_locals();
+  int n1 = e1->estimate_locals();
+  int n2 = e2->estimate_locals();
   return n1 > n2 ? n1 : n2;
 }
 
-int mul_class::calc_locals()
+int mul_class::estimate_locals()
 {
-  int n1 = e1->calc_locals();
-  int n2 = e2->calc_locals();
+  int n1 = e1->estimate_locals();
+  int n2 = e2->estimate_locals();
   return n1 > n2 ? n1 : n2;
 }
 
-int divide_class::calc_locals()
+int divide_class::estimate_locals()
 {
-  int n1 = e1->calc_locals();
-  int n2 = e2->calc_locals();
+  int n1 = e1->estimate_locals();
+  int n2 = e2->estimate_locals();
   return n1 > n2 ? n1 : n2;
 }
 
-int neg_class::calc_locals()
+int neg_class::estimate_locals()
 {
-  return e1->calc_locals();
+  return e1->estimate_locals();
 }
 
-int lt_class::calc_locals()
+int lt_class::estimate_locals()
 {
-  int n1 = e1->calc_locals();
-  int n2 = e2->calc_locals();
+  int n1 = e1->estimate_locals();
+  int n2 = e2->estimate_locals();
   return n1 > n2 ? n1 : n2;
 }
 
-int eq_class::calc_locals()
+int eq_class::estimate_locals()
 {
-  int n1 = e1->calc_locals();
-  int n2 = e2->calc_locals();
+  int n1 = e1->estimate_locals();
+  int n2 = e2->estimate_locals();
   return n1 > n2 ? n1 : n2;
 }
 
-int leq_class::calc_locals()
+int leq_class::estimate_locals()
 {
-  int n1 = e1->calc_locals();
-  int n2 = e2->calc_locals();
+  int n1 = e1->estimate_locals();
+  int n2 = e2->estimate_locals();
   return n1 > n2 ? n1 : n2;
 }
 
-int comp_class::calc_locals()
+int comp_class::estimate_locals()
 {
-  return e1->calc_locals();
+  return e1->estimate_locals();
 }
 
-int int_const_class::calc_locals()
+int int_const_class::estimate_locals()
 {
   return 0;
 }
 
-int string_const_class::calc_locals()
+int string_const_class::estimate_locals()
 {
   return 0;
 }
 
-int bool_const_class::calc_locals()
+int bool_const_class::estimate_locals()
 {
   return 0;
 }
 
-int new__class::calc_locals()
+int new__class::estimate_locals()
 {
   return 0;
 }
 
-int isvoid_class::calc_locals()
+int isvoid_class::estimate_locals()
 {
-  return e1->calc_locals();
+  return e1->estimate_locals();
 }
 
-int no_expr_class::calc_locals()
+int no_expr_class::estimate_locals()
 {
   return 0;
 }
 
-int object_class::calc_locals()
+int object_class::estimate_locals()
 {
   return 0;
 }
@@ -1766,7 +1810,6 @@ void typcase_class::code(ostream& out, CgenEnvironment *env)
   for (int tag = env->lookup_max_child_tag(Object); tag >= 0; tag--) {
     for (int i = cases->first(); cases->more(i); i = cases->next(i)) {
       Case_class *branch = cases->nth(i);
-
       if (env->lookup_tag(branch->get_type_decl()) == tag)
         branch->code(out, env, match_label);
     }
@@ -1815,19 +1858,7 @@ void let_class::code(ostream& out, CgenEnvironment *env)
 
 void plus_class::code(ostream& out, CgenEnvironment *env)
 {
-  // Evaluate the first expression
-  e1->code(out, env);
-  
-  emit_push(ACC, out);
-
-  // Evaluate the second expression and copy the result
-  e2->code(out, env);
-  emit_jal("Object" METHOD_SEP "copy", out);
-
-  emit_pop(T1, out);
-
-  emit_fetch_int(T1, T1, out); // fetch the first int value into t1
-  emit_fetch_int(T2, ACC, out); // fetch the second int value into t2
+  emit_binary_arith_operands(e1, e2, out, env);
 
   // Store the addition result in the copied object
   emit_add(T1, T1, T2, out);
@@ -1836,19 +1867,7 @@ void plus_class::code(ostream& out, CgenEnvironment *env)
 
 void sub_class::code(ostream& out, CgenEnvironment *env)
 {
-  // Evaluate the first expression
-  e1->code(out, env);
-  
-  emit_push(ACC, out);
-
-  // Evaluate the second expression and copy the result
-  e2->code(out, env);
-  emit_jal("Object" METHOD_SEP "copy", out);
-
-  emit_pop(T1, out);
-  
-  emit_fetch_int(T1, T1, out); // fetch the first int value into t1
-  emit_fetch_int(T2, ACC, out); // fetch the second int value into t2
+  emit_binary_arith_operands(e1, e2, out, env);
 
   // Store the subtraction result in the copied object
   emit_sub(T1, T1, T2, out);
@@ -1857,19 +1876,7 @@ void sub_class::code(ostream& out, CgenEnvironment *env)
 
 void mul_class::code(ostream& out, CgenEnvironment *env)
 {
-  // Evaluate the first expression
-  e1->code(out, env);
-  
-  emit_push(ACC, out);
-
-  // Evaluate the second expression and copy the result
-  e2->code(out, env);
-  emit_jal("Object" METHOD_SEP "copy", out);
-
-  emit_pop(T1, out);
-  
-  emit_fetch_int(T1, T1, out); // fetch the first int value into t1
-  emit_fetch_int(T2, ACC, out); // fetch the second int value into t2
+  emit_binary_arith_operands(e1, e2, out, env);
 
   // Store the multiplication result in the copied object
   emit_mul(T1, T1, T2, out);
@@ -1878,19 +1885,7 @@ void mul_class::code(ostream& out, CgenEnvironment *env)
 
 void divide_class::code(ostream& out, CgenEnvironment *env)
 {
-  // Evaluate the first expression
-  e1->code(out, env);
-  
-  emit_push(ACC, out);
-
-  // Evaluate the second expression and copy the result
-  e2->code(out, env);
-  emit_jal("Object" METHOD_SEP "copy", out);
-
-  emit_pop(T1, out);
-  
-  emit_fetch_int(T1, T1, out); // fetch the first int value into t1
-  emit_fetch_int(T2, ACC, out); // fetch the second int value into t2
+  emit_binary_arith_operands(e1, e2, out, env);
 
   // Store the division result in the copied object
   emit_div(T1, T1, T2, out);
@@ -1912,18 +1907,12 @@ void neg_class::code(ostream& out, CgenEnvironment *env)
 
 void lt_class::code(ostream& out, CgenEnvironment *env)
 {
-  int done_label = env->get_next_label();
-
-  e1->code(out, env); // evaluate the first expression
-  emit_push(ACC, out); // save the result on stack
-  e2->code(out, env); // evaluate the second expression
-  emit_pop(T1, out); // restore the first result
-
-  emit_fetch_int(T1, T1, out); // fetch the first int value into t1
-  emit_fetch_int(T2, ACC, out); // fetch the second int value into t1
+  emit_binary_cmp_operands(e1, e2, out, env);
 
   // Assume true by default
   emit_load_bool(ACC, true_bool, out);
+
+  int done_label = env->get_next_label();
 
   // If t1 < t2 done; otherwise load false
   emit_blt(T1, T2, done_label, out);
@@ -1934,17 +1923,16 @@ void lt_class::code(ostream& out, CgenEnvironment *env)
 
 void eq_class::code(ostream& out, CgenEnvironment *env)
 {
-  int done_label = env->get_next_label();
-
   e1->code(out, env); // evaluate the first expression
   emit_push(ACC, out); // save the result on stack
   e2->code(out, env); // evaluate the second expression
-  emit_pop(T1, out); // restore the first result
-
-  emit_move(T2, ACC, out);
+  emit_pop(T1, out); // restore the first result in t1
+  emit_move(T2, ACC, out); // move the second result in t2
 
   // Assume true by default
   emit_load_bool(ACC, true_bool, out);
+
+  int done_label = env->get_next_label();
 
   // First, check for pointer equality and, if true, we're done
   emit_beq(T1, T2, done_label, out);
@@ -1958,18 +1946,12 @@ void eq_class::code(ostream& out, CgenEnvironment *env)
 
 void leq_class::code(ostream& out, CgenEnvironment *env)
 {
-  int done_label = env->get_next_label();
-
-  e1->code(out, env); // evaluate the first expression
-  emit_push(ACC, out); // save the result on stack
-  e2->code(out, env); // evaluate the second expression
-  emit_pop(T1, out); // restore the first result
-
-  emit_fetch_int(T1, T1, out); // fetch the first int value into t1
-  emit_fetch_int(T2, ACC, out); // fetch the second int value into t2
+  emit_binary_cmp_operands(e1, e2, out, env);
 
   // Assume true by default
   emit_load_bool(ACC, true_bool, out);
+
+  int done_label = env->get_next_label();
 
   // If t1 <= t2 done; otherwise load false
   emit_bleq(T1, T2, done_label, out);
